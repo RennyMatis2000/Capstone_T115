@@ -7,8 +7,6 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from .api import create_api
-
-# from .briefing_instructions import InterimInstructions
 from .briefing_instructions import StructuredBriefingInstructions
 from .briefing_provider import DatabricksGenerationProvider, StubGenerationProvider
 from .briefing_store import InMemoryBriefingStore, VolumeBriefingStore
@@ -17,7 +15,7 @@ from .config import ConfigurationError, Settings
 from .mcp_server import create_mcp_server
 from .retry_workflow import SingleRetryWorkflow
 from .streamlit_host import StreamlitHost, StreamlitProxy
-from .student_repository import DatabricksStudentRepository, MockStudentRepository
+from .student_repository import DatabricksStudentRepository
 from .student_service import StudentService
 
 logger = logging.getLogger(__name__)
@@ -25,12 +23,9 @@ logger = logging.getLogger(__name__)
 
 def build_service(settings: Settings | None = None) -> StudentService:
     settings = settings or Settings.from_env()
-    repository = MockStudentRepository() if settings.use_mock_data else DatabricksStudentRepository(settings)
-    # Placeholder seams still owned by later stories: generation (US-13), instructions (US-12),
-    # validation (US-14). Feature-002 / US-15 supplies the concrete retry workflow and, when
-    # BRIEFING_VOLUME is set, the governed Unity Catalog Volume store; orchestration is unchanged.
-    # Without a model name the stub provider raises ConfigurationError only when a briefing is
-    # requested, so profiles, the high-risk list and mock mode keep working (Feature-001 FR-014).
+    repository = DatabricksStudentRepository(settings)
+    # Missing generation does not prevent data browsing; it fails explicitly
+    # when a briefing is requested. No template fallback is configured.
     if settings.model_name:
         generation_provider = DatabricksGenerationProvider(model_name=settings.model_name)
     else:
@@ -41,11 +36,8 @@ def build_service(settings: Settings | None = None) -> StudentService:
         repository=repository,
         generation_provider=generation_provider,
         instructions=StructuredBriefingInstructions(),
-        # instructions=InterimInstructions(),
         validator=validator,
-        retry_workflow=SingleRetryWorkflow(
-            generation_provider=generation_provider, validator=validator
-        ),
+        retry_workflow=SingleRetryWorkflow(generation_provider=generation_provider, validator=validator),
         store=store,
     )
 

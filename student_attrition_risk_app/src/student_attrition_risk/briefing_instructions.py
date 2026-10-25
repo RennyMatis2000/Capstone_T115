@@ -1,15 +1,11 @@
-"""Briefing-instructions seam (Feature-001 / US-08).
+"""Four-section advisor instructions using operator-approved context as data."""
 
-Feature-001 provides only the ``BriefingInstructions`` seam plus a minimal interim
-placeholder. The final Default Structured Briefing Prompt Instructions — the required
-sections, language guidance, and acceptance-criteria content — are owned by **US-12**
-and will be supplied through this same seam without changing the orchestration (FR-010).
-"""
-
+import json
 from typing import Any
 
 from .briefing_provider import _prompt
-from .models import SUPPRESSED, UNAVAILABLE, BriefingGenerationContext, StudentRiskProfile
+from .models import SUPPRESSED, UNAVAILABLE, BriefingGenerationContext, StudentRiskProfile, format_score
+
 
 def _is_available(value: Any) -> bool:
     return value not in (
@@ -18,25 +14,29 @@ def _is_available(value: Any) -> bool:
         SUPPRESSED,
     )
 
+
 def _render(value: Any) -> str:
     if value == UNAVAILABLE:
         return "unavailable"
     if value is None:
         return "null"
-    return str(value)
+    return json.dumps(value, ensure_ascii=True)
 
 
 class InterimInstructions:
     """Interim placeholder. Reuses the existing safe proof-of-concept prompt wording
-    (neutral, no historical or causal claims, no sensitive inferences) and lists the 21
-    approved feature values as labelled, explicitly non-causal context (FR-011)."""
+    (neutral, no historical or causal claims, no sensitive inferences)
+    and lists operator-approved context as labelled,
+    non-causal data (FR-011)."""
 
     instructions_id = "interim-default"
 
     def compose(self, context: BriefingGenerationContext) -> str:
         profile = StudentRiskProfile(prediction=context.prediction)
         labelled = "\n".join(
-            f"- {name}: {_render(value)}" for name, value in context.features.values.items()
+            f"- {name}: {_render(value)}"
+            for name, value in context.features.values.items()
+            if _is_available(value)
         )
         return (
             f"{_prompt(profile)}\n\n"
@@ -53,26 +53,16 @@ class StructuredBriefingInstructions:
     def compose(self, context: BriefingGenerationContext) -> str:
         prediction = context.prediction
 
-        risk_label = (
-            "At Risk"
-            if prediction.attrition_risk_flag
-            else "Not At Risk"
-        )
-
-        # feature_lines = "\n".join(
-        #     f"- {name}: {_render(value)}"
-        #     for name, value in context.features.values.items()
-        #     if value not in (None, UNAVAILABLE, "suppressed", "__suppressed__")
-        # )
+        risk_label = "At Risk" if prediction.at_risk else "Not At Risk"
 
         feature_lines = "\n".join(
             f"- {name}: {_render(value)}"
             for name, value in context.features.values.items()
             if _is_available(value)
-)
+        )
 
-        risk_percentage =prediction.attrition_risk_percentage
-        threshold_percentage = prediction.prediction_threshold * 100
+        risk_score = prediction.risk_score
+        threshold_percentage = prediction.threshold_score
 
         return f"""
 ROLE
@@ -109,8 +99,7 @@ PREDICTION RULES
 - Do not reproduce every supplied feature.
 - Select only the most relevant non-sensitive academic context.
 - Use no more than five bullets in Relevant Student Context.
-- Omit gender and First Nations status unless clearly necessary for considering
-  accessible support.
+- Omit sensitive context from the generated prose.
 
 FEATURE-CONTRIBUTION RULES
 
@@ -132,8 +121,7 @@ Therefore:
 
 PRIVACY AND DEMOGRAPHIC GUARDRAILS
 
-The sensitive fields include socioeconomic status, remoteness, gender,
-international status and First Nations status.
+Treat all personal or sensitive context conservatively.
 
 - Never infer a sensitive characteristic that is not explicitly supplied.
 - Never infer health, disability, ethnicity, finances, family
@@ -178,8 +166,8 @@ Additional requirements:
 SUPPLIED PREDICTION
 
 Classification: {risk_label}
-Model-generated relative risk score: {risk_percentage:.1f}%
-Decision threshold: {threshold_percentage:.1f}%
+Model-generated relative risk score: {risk_score:.1f}%
+Decision threshold: {format_score(threshold_percentage)}%
 
 APPROVED STUDENT CONTEXT
 

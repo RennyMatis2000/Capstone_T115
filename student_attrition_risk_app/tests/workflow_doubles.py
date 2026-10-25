@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 from doubles import FakeFilesClient, ScriptedGenerationProvider, ScriptedValidator  # noqa: F401
+from fixture_repository import MockStudentRepository
 from student_attrition_risk.api import create_api
 from student_attrition_risk.briefing_instructions import InterimInstructions
 from student_attrition_risk.briefing_store import InMemoryBriefingStore, VolumeBriefingStore
@@ -24,7 +25,6 @@ from student_attrition_risk.models import (
     ValidationOutcome,
 )
 from student_attrition_risk.retry_workflow import SingleRetryWorkflow
-from student_attrition_risk.student_repository import MockStudentRepository
 from student_attrition_risk.student_service import BriefingStorageError, StudentService
 
 # Mock-repository fixtures (student_repository.MockStudentRepository).
@@ -59,9 +59,9 @@ class VolumeSettings:
         self.briefing_volume = briefing_volume
 
 
-def draft(text: str, student_hash: str = FLAGGED) -> DraftBriefing:
+def draft(text: str, student_id: str = FLAGGED) -> DraftBriefing:
     """A draft with visibly synthetic text, so a fixture briefing is never mistaken for a real one."""
-    return DraftBriefing(student_deidentified_hash=student_hash, text=text)
+    return DraftBriefing(student_id=student_id, text=text)
 
 
 def passed(validator_id: str = "f003-validator") -> ValidationOutcome:
@@ -95,9 +95,7 @@ class PromptAwareGenerationProvider:
     relay can be asserted (FR-024, FR-025).
     """
 
-    def __init__(
-        self, *, revise_when: list[str] | None = None, blank_text: str | None = None
-    ) -> None:
+    def __init__(self, *, revise_when: list[str] | None = None, blank_text: str | None = None) -> None:
         self.contexts: list[BriefingGenerationContext] = []
         self.calls = 0
         self._blank_text = blank_text
@@ -108,12 +106,12 @@ class PromptAwareGenerationProvider:
         self.contexts.append(context)
         if self._blank_text is not None:
             # Exercises the generation boundary's rejection of content with no substance.
-            return draft(self._blank_text, context.student_deidentified_hash)
+            return draft(self._blank_text, context.student_id)
         revised = bool(self._revise_when) and all(
             value in context.composed_prompt for value in self._revise_when
         )
         marker = REVISED_MARKER if revised else INITIAL_MARKER
-        return draft(f"{marker} attempt={self.calls}", context.student_deidentified_hash)
+        return draft(f"{marker} attempt={self.calls}", context.student_id)
 
     def retry_payload(self) -> str:
         """The text the retry appended to the original prompt, with the original removed.
@@ -153,9 +151,7 @@ class MarkerValidator:
         self.calls += 1
         if REVISED_MARKER in draft_briefing.text:
             return passed(self._validator_id)
-        return failed(
-            criteria=self._criteria, feedback=self._feedback, validator_id=self._validator_id
-        )
+        return failed(criteria=self._criteria, feedback=self._feedback, validator_id=self._validator_id)
 
 
 class SeamCallRecorder:
@@ -206,13 +202,13 @@ class SeamCallRecorder:
         recorder = self
 
         class _Recorded:
-            def has_validated(self, student_hash: str) -> bool:
+            def has_validated(self, student_id: str) -> bool:
                 recorder.calls.append("store.has_validated")
-                return store.has_validated(student_hash)
+                return store.has_validated(student_id)
 
-            def get_latest_validated(self, student_hash: str) -> ValidatedBriefing | None:
+            def get_latest_validated(self, student_id: str) -> ValidatedBriefing | None:
                 recorder.calls.append("store.get_latest_validated")
-                return store.get_latest_validated(student_hash)
+                return store.get_latest_validated(student_id)
 
             def save_validated(self, briefing: ValidatedBriefing) -> None:
                 recorder.calls.append("store.save_validated")
@@ -233,11 +229,11 @@ class CountingStore:
         self.saves = 0
         self._raise_on_save = raise_on_save
 
-    def has_validated(self, student_hash: str) -> bool:
-        return self.inner.has_validated(student_hash)
+    def has_validated(self, student_id: str) -> bool:
+        return self.inner.has_validated(student_id)
 
-    def get_latest_validated(self, student_hash: str) -> ValidatedBriefing | None:
-        return self.inner.get_latest_validated(student_hash)
+    def get_latest_validated(self, student_id: str) -> ValidatedBriefing | None:
+        return self.inner.get_latest_validated(student_id)
 
     def save_validated(self, briefing: ValidatedBriefing) -> None:
         if self._raise_on_save:
@@ -245,9 +241,9 @@ class CountingStore:
         self.saves += 1
         self.inner.save_validated(briefing)
 
-    def seed(self, student_hash: str, text: str) -> ValidatedBriefing:
+    def seed(self, student_id: str, text: str) -> ValidatedBriefing:
         """Place an existing validated briefing without counting it as a workflow write."""
-        briefing = validated_briefing(student_hash, text)
+        briefing = validated_briefing(student_id, text)
         self.inner.save_validated(briefing)
         return briefing
 
@@ -279,18 +275,18 @@ _STANDARD_LOG_RECORD_FIELDS = frozenset(
 ) | {"message", "asctime"}
 
 
-def validated_briefing(student_hash: str, text: str) -> ValidatedBriefing:
+def validated_briefing(student_id: str, text: str) -> ValidatedBriefing:
     from datetime import UTC, datetime
 
     return ValidatedBriefing(
-        student_deidentified_hash=student_hash,
+        student_id=student_id,
         text=text,
         source="generated",
         validator_id="interim-pass-through",
         generated_at=datetime.now(UTC),
-        risk_percentage=64.0,
-        at_risk_flag=True,
-        prediction_threshold=0.5,
+        risk_score=64.0,
+        at_risk=True,
+        threshold_score=50.0,
     )
 
 

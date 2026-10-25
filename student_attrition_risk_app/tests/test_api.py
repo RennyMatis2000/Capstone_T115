@@ -2,13 +2,13 @@ from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 
+from fixture_repository import MockStudentRepository
 from student_attrition_risk.api import create_api
 from student_attrition_risk.briefing_instructions import InterimInstructions
 from student_attrition_risk.briefing_provider import StubGenerationProvider
 from student_attrition_risk.briefing_store import InMemoryBriefingStore
 from student_attrition_risk.models import DraftBriefing, ValidatedBriefing, ValidationOutcome
 from student_attrition_risk.retry_workflow import RetryNotConfigured
-from student_attrition_risk.student_repository import MockStudentRepository
 from student_attrition_risk.student_service import BriefingStorageError, StudentService
 
 FLAGGED = "synthetic-student-001"
@@ -43,18 +43,18 @@ def _client(*, generation_provider=None, validator=None, store=None) -> TestClie
     return TestClient(create_api(service))
 
 
-def _seed(store: InMemoryBriefingStore, student_hash: str, text: str) -> None:
+def _seed(store: InMemoryBriefingStore, student_id: str, text: str) -> None:
     InMemoryBriefingStore.save_validated(
         store,
         ValidatedBriefing(
-            student_deidentified_hash=student_hash,
+            student_id=student_id,
             text=text,
             source="generated",
             validator_id="interim-pass-through",
             generated_at=datetime.now(UTC),
-            risk_percentage=64.0,
-            at_risk_flag=True,
-            prediction_threshold=0.5,
+            risk_score=64.0,
+            at_risk=True,
+            threshold_score=50.0,
         ),
     )
 
@@ -74,8 +74,11 @@ def test_post_briefing_unconfigured_generation_returns_503_not_a_template():
 
 
 def test_post_briefing_generates_and_returns_validated_briefing():
-    client = _client(generation_provider=StubGenerationProvider(
-        draft=DraftBriefing(student_deidentified_hash=FLAGGED, text="fresh briefing")))
+    client = _client(
+        generation_provider=StubGenerationProvider(
+            draft=DraftBriefing(student_id=FLAGGED, text="fresh briefing")
+        )
+    )
     response = client.post(f"/api/students/{FLAGGED}/briefing")
     assert response.status_code == 200
     body = response.json()
@@ -99,7 +102,8 @@ def test_post_briefing_returns_existing_then_regenerates_on_flag():
     _seed(store, HAS_EXISTING, "stored body")
     client = _client(
         generation_provider=StubGenerationProvider(
-            draft=DraftBriefing(student_deidentified_hash=HAS_EXISTING, text="regenerated")),
+            draft=DraftBriefing(student_id=HAS_EXISTING, text="regenerated")
+        ),
         store=store,
     )
     first = client.post(f"/api/students/{HAS_EXISTING}/briefing")
@@ -119,8 +123,7 @@ def test_post_briefing_retry_terminal_maps_to_502_with_category_in_detail():
     assert r1.json()["detail"] == "Briefing could not be produced (generation)"
 
     val_fail = _client(
-        generation_provider=StubGenerationProvider(
-            draft=DraftBriefing(student_deidentified_hash=FLAGGED, text="d")),
+        generation_provider=StubGenerationProvider(draft=DraftBriefing(student_id=FLAGGED, text="d")),
         validator=_FailValidator(),
     )
     r2 = val_fail.post(f"/api/students/{FLAGGED}/briefing")
@@ -130,8 +133,7 @@ def test_post_briefing_retry_terminal_maps_to_502_with_category_in_detail():
 
 def test_post_briefing_storage_failure_maps_to_503():
     client = _client(
-        generation_provider=StubGenerationProvider(
-            draft=DraftBriefing(student_deidentified_hash=FLAGGED, text="d")),
+        generation_provider=StubGenerationProvider(draft=DraftBriefing(student_id=FLAGGED, text="d")),
         store=_RaisingStore(),
     )
     response = client.post(f"/api/students/{FLAGGED}/briefing")

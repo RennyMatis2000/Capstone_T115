@@ -177,9 +177,7 @@ def test_second_attempt_succeeds_only_when_the_reported_values_propagated():
     received, and the validator passes only revised text. Keying on the wrapper header instead
     would let this pass even if the payload were dropped.
     """
-    gen = PromptAwareGenerationProvider(
-        revise_when=[PLACEHOLDER_CRITERION_A, PLACEHOLDER_FEEDBACK]
-    )
+    gen = PromptAwareGenerationProvider(revise_when=[PLACEHOLDER_CRITERION_A, PLACEHOLDER_FEEDBACK])
     val = MarkerValidator(criteria=[PLACEHOLDER_CRITERION_A], feedback=PLACEHOLDER_FEEDBACK)
     service = build_service(generation=gen, validation=val)
 
@@ -225,16 +223,14 @@ def test_retry_request_unchanged_when_nothing_was_reported():
 
 def test_identity_fields_are_preserved_across_the_retry_request():
     """Hash, prediction, features and instructions provenance survive the retry (FR-025)."""
-    gen = PromptAwareGenerationProvider(
-        revise_when=[PLACEHOLDER_CRITERION_A, PLACEHOLDER_FEEDBACK]
-    )
+    gen = PromptAwareGenerationProvider(revise_when=[PLACEHOLDER_CRITERION_A, PLACEHOLDER_FEEDBACK])
     val = MarkerValidator(criteria=[PLACEHOLDER_CRITERION_A], feedback=PLACEHOLDER_FEEDBACK)
     service = build_service(generation=gen, validation=val)
 
     service.request_briefing(FLAGGED)
 
     first, second = gen.contexts
-    assert second.student_deidentified_hash == first.student_deidentified_hash
+    assert second.student_id == first.student_id
     assert second.prediction == first.prediction
     assert second.features == first.features
     assert second.instructions_id == first.instructions_id

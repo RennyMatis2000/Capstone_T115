@@ -15,6 +15,7 @@ from dataclasses import replace
 import pytest
 from fastapi.testclient import TestClient
 
+from fixture_repository import MockStudentRepository
 from student_attrition_risk.briefing_provider import StubGenerationProvider
 from student_attrition_risk.briefing_validation import StructuredBriefingValidator
 from student_attrition_risk.config import ConfigurationError, Settings
@@ -24,18 +25,17 @@ from student_attrition_risk.models import (
     BriefingGenerationContext,
     DraftBriefing,
 )
-from student_attrition_risk.student_repository import MockStudentRepository
 from student_attrition_risk.student_service import BriefingNotProducedError
 from workflow_doubles import FLAGGED, NOT_FLAGGED
 
 
-def _context(student_hash: str = FLAGGED, **feature_overrides) -> BriefingGenerationContext:
+def _context(student_id: str = FLAGGED, **feature_overrides) -> BriefingGenerationContext:
     repository = MockStudentRepository()
-    values = dict(repository.get_model_features(student_hash).values)
+    values = dict(repository.get_model_features(student_id).values)
     values.update(feature_overrides)
     return BriefingGenerationContext(
-        student_deidentified_hash=student_hash,
-        prediction=repository.get_prediction(student_hash),
+        student_id=student_id,
+        prediction=repository.get_prediction(student_id),
         features=ApprovedModelFeatureValues(values=values),
         instructions_id="teammate-highs-test",
         composed_prompt="",
@@ -45,7 +45,7 @@ def _context(student_hash: str = FLAGGED, **feature_overrides) -> BriefingGenera
 def _briefing_text(
     level: str = "At Risk",
     score: str = "78.5%",
-    context_line: str = "The student has passed 72 of 96 enrolled credit points.",
+    context_line: str = "The supplied support channel is email.",
 ) -> str:
     return (
         "## Risk Summary\n"
@@ -61,7 +61,7 @@ def _briefing_text(
 
 def _validate(text: str, context: BriefingGenerationContext | None = None):
     context = context or _context()
-    draft = DraftBriefing(student_deidentified_hash=context.student_deidentified_hash, text=text)
+    draft = DraftBriefing(student_id=context.student_id, text=text)
     return StructuredBriefingValidator().validate(draft, context)
 
 
@@ -131,9 +131,7 @@ def test_d2_score_with_a_space_before_the_percent_sign_passes():
 
 
 def test_d3_generic_context_fails_traceability():
-    outcome = _validate(
-        _briefing_text(context_line="Generic information about students and their study.")
-    )
+    outcome = _validate(_briefing_text(context_line="Generic information about students and their study."))
 
     assert not outcome.passed
     assert "AC8" in outcome.failed_criteria
@@ -143,18 +141,27 @@ def test_d3_digits_inside_other_numbers_do_not_count_as_a_mention():
     # 2026 contains "20" and "26"; 7.25 contains "72"-like digits but not the value 72.
     outcome = _validate(
         _briefing_text(context_line="Reviewed in 2026 against a 7.25 benchmark."),
-        _context(enrolment_year=1999),
+        _context(approved_note_4=1999),
     )
 
     assert "AC8" in outcome.failed_criteria
 
 
 def test_d3_zero_and_one_values_do_not_count_as_a_mention():
-    context = _context(**{column: 0 for column in (
-        "age_at_census", "eftsl", "enrolment_year", "cumulative_credit_points_enrolled",
-        "cumulative_credit_points_passed", "cumulative_credit_points_failed",
-        "cumulative_credit_points_withdrawn",
-    )})
+    context = _context(
+        **{
+            column: 0
+            for column in (
+                "approved_note_18",
+                "approved_note_3",
+                "approved_note_4",
+                "approved_note_8",
+                "approved_note_9",
+                "approved_note_10",
+                "approved_note_11",
+            )
+        }
+    )
 
     outcome = _validate(_briefing_text(context_line="Score 1 of 10, level 0."), context)
 
@@ -162,17 +169,15 @@ def test_d3_zero_and_one_values_do_not_count_as_a_mention():
 
 
 def test_d3_common_words_from_text_values_do_not_count_as_a_mention():
-    context = _context(attendance_mode="Full_time", socioeconomic_status="Low")
+    context = _context(approved_note_1="Full_time", approved_note_16="Low")
 
-    outcome = _validate(
-        _briefing_text(context_line="The student should follow up in time."), context
-    )
+    outcome = _validate(_briefing_text(context_line="The student should follow up in time."), context)
 
     assert "AC8" in outcome.failed_criteria
 
 
 def test_d3_a_whole_text_value_counts_as_a_mention():
-    context = _context(attendance_mode="Full_time")
+    context = _context(approved_note_1="Full_time")
 
     outcome = _validate(_briefing_text(context_line="The student studies full time."), context)
 
@@ -180,7 +185,7 @@ def test_d3_a_whole_text_value_counts_as_a_mention():
 
 
 def test_d3_non_finite_values_are_skipped_rather_than_crashing():
-    context = _context(eftsl=math.nan, age_at_census=math.inf)
+    context = _context(approved_note_3=math.nan, approved_note_18=math.inf)
 
     outcome = _validate(_briefing_text(), context)
 
@@ -212,16 +217,15 @@ def test_a5_configuration_error_is_logged(caplog):
 
 
 def _mock_settings(model_name: str | None) -> Settings:
-    return replace(
-        Settings.from_env(), use_mock_data=True, model_name=model_name, briefing_volume=None
-    )
+    return replace(Settings.from_env(), model_name=model_name, briefing_volume=None)
 
 
 @pytest.mark.parametrize("model_name", [None, ""])
 def test_d7_mock_mode_builds_without_a_model_name(model_name):
     service = build_service(_mock_settings(model_name))
 
-    assert service.get_student_profile(FLAGGED).prediction.student_deidentified_hash == FLAGGED
+    with pytest.raises(ConfigurationError):
+        service.get_student_profile(FLAGGED)
     assert isinstance(service.generation_provider, StubGenerationProvider)
 
 

@@ -30,20 +30,20 @@ def _store(fake: FakeFilesClient | None = None) -> tuple[VolumeBriefingStore, Fa
 def _briefing(
     text: str,
     *,
-    student_hash: str = HASH,
+    student_id: str = HASH,
     when: datetime | None = None,
     attempt_count: int = 1,
 ) -> ValidatedBriefing:
     return ValidatedBriefing(
-        student_deidentified_hash=student_hash,
+        student_id=student_id,
         text=text,
         source="generated",
         validator_id="interim-pass-through",
         generated_at=when or datetime.now(UTC),
         attempt_count=attempt_count,
-        risk_percentage=64.0,
-        at_risk_flag=True,
-        prediction_threshold=0.5,
+        risk_score=64.0,
+        at_risk=True,
+        threshold_score=50.0,
     )
 
 
@@ -89,7 +89,7 @@ def test_multiple_saves_expose_the_most_recent_and_keep_the_earlier_file():
 
 def test_saves_are_isolated_per_hash():
     store, _ = _store()
-    store.save_validated(_briefing("a", student_hash=OTHER))
+    store.save_validated(_briefing("a", student_id=OTHER))
     assert store.has_validated(HASH) is False
     assert store.get_latest_validated(HASH) is None
 

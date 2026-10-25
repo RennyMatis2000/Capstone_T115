@@ -96,7 +96,7 @@ def test_unknown_student_attempts_no_generation():
 # --- FR-022: exactly one explicit outcome, across the whole matrix -----------
 
 
-def _outcome_of(service, student_hash: str, *, regenerate: bool = False) -> str:
+def _outcome_of(service, student_id: str, *, regenerate: bool = False) -> str:
     """Reduce a request to the single explicit outcome it reached.
 
     Returns a validated-briefing marker or the name of the explicit failure. Any other end state
@@ -104,7 +104,7 @@ def _outcome_of(service, student_hash: str, *, regenerate: bool = False) -> str:
     is reported as such so FR-022 can fail on it.
     """
     try:
-        result = service.request_briefing(student_hash, regenerate=regenerate)
+        result = service.request_briefing(student_id, regenerate=regenerate)
     except StudentNotFoundError:
         return "explicit-failure:not-found"
     except StudentNotAtRiskError:
@@ -170,9 +170,7 @@ def _matrix():
     def existing():
         store = CountingStore()
         store.seed(HAS_EXISTING, "an existing briefing")
-        return build_service(
-            generation=_ExplodingProvider(), validation=ScriptedValidator(), store=store
-        )
+        return build_service(generation=_ExplodingProvider(), validation=ScriptedValidator(), store=store)
 
     def regenerate_success():
         store = CountingStore()
@@ -187,22 +185,16 @@ def _matrix():
         store = CountingStore()
         store.seed(HAS_EXISTING, "an existing briefing")
         return build_service(
-            generation=ScriptedGenerationProvider(
-                RuntimeError("down"), RuntimeError("down")
-            ),
+            generation=ScriptedGenerationProvider(RuntimeError("down"), RuntimeError("down")),
             validation=ScriptedValidator(),
             store=store,
         )
 
     def not_at_risk():
-        return build_service(
-            generation=_ExplodingProvider(), validation=ScriptedValidator()
-        )
+        return build_service(generation=_ExplodingProvider(), validation=ScriptedValidator())
 
     def unknown():
-        return build_service(
-            generation=_ExplodingProvider(), validation=ScriptedValidator()
-        )
+        return build_service(generation=_ExplodingProvider(), validation=ScriptedValidator())
 
     return [
         ("attempt-1 success", success, FLAGGED, False, "validated-briefing"),
@@ -226,16 +218,14 @@ def _matrix():
 
 
 @pytest.mark.parametrize(
-    ("label", "factory", "student_hash", "regenerate", "expected"),
+    ("label", "factory", "student_id", "regenerate", "expected"),
     [pytest.param(*row, id=row[0].replace(" ", "-")) for row in _matrix()],
 )
-def test_every_outcome_reaches_exactly_one_explicit_result(
-    label, factory, student_hash, regenerate, expected
-):
+def test_every_outcome_reaches_exactly_one_explicit_result(label, factory, student_id, regenerate, expected):
     """FR-022 / SC-002: no request ends with an absent or ambiguous result.
 
     Asserted as a matrix rather than as isolated cases, so a path that silently returns ``None``
     or an unvalidated briefing is caught wherever it appears.
     """
-    outcome = _outcome_of(factory(), student_hash, regenerate=regenerate)
+    outcome = _outcome_of(factory(), student_id, regenerate=regenerate)
     assert outcome == expected, f"{label}: expected {expected}, reached {outcome}"

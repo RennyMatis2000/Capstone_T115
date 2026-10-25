@@ -27,22 +27,22 @@ HASH = "synthetic-student-001"
 
 def _context(prompt: str = "ORIGINAL PROMPT") -> BriefingGenerationContext:
     return BriefingGenerationContext(
-        student_deidentified_hash=HASH,
+        student_id=HASH,
         prediction=StudentPrediction(
-            student_deidentified_hash=HASH,
-            attrition_risk_percentage=78.5,
-            attrition_risk_flag=True,
-            prediction_threshold=0.5,
-            mlflow_run_id="run-1",
+            student_id=HASH,
+            risk_score=78.5,
+            at_risk=True,
+            threshold_score=50.0,
+            model_reference="run-1",
         ),
-        features=ApprovedModelFeatureValues(values={"age_at_census": 21}),
+        features=ApprovedModelFeatureValues(values={"approved_note_18": 21}),
         instructions_id="interim-default",
         composed_prompt=prompt,
     )
 
 
 def _draft(text: str) -> DraftBriefing:
-    return DraftBriefing(student_deidentified_hash=HASH, text=text)
+    return DraftBriefing(student_id=HASH, text=text)
 
 
 def _passed(validator_id: str = "stub-validator") -> ValidationOutcome:
@@ -87,7 +87,7 @@ def test_validation_failure_then_retry_success_produces_attempt_2():
     assert result.briefing.text == "second briefing"
     assert result.briefing.validator_id == "real-validator"
     assert result.briefing.source == "generated"
-    assert result.briefing.risk_percentage == 78.5
+    assert result.briefing.risk_score == 78.5
     assert gen.calls == 1
     assert val.calls == 1
 
@@ -107,9 +107,7 @@ def test_generation_failure_then_retry_success_produces_attempt_2():
 
 def test_retry_request_for_validation_failure_carries_criteria_and_feedback():
     gen = _RecordingGeneration(_draft("x"))
-    workflow = SingleRetryWorkflow(
-        generation_provider=gen, validator=ScriptedValidator(_passed())
-    )
+    workflow = SingleRetryWorkflow(generation_provider=gen, validator=ScriptedValidator(_passed()))
     original = _context("ORIGINAL PROMPT")
 
     workflow.run(
@@ -128,7 +126,7 @@ def test_retry_request_for_validation_failure_carries_criteria_and_feedback():
     assert "advisor-tone" in retry_prompt
     assert "soften the tone and add the caveat" in retry_prompt
     # identity / factual content preserved (FR-006)
-    assert gen.seen_context.student_deidentified_hash == original.student_deidentified_hash
+    assert gen.seen_context.student_id == original.student_id
     assert gen.seen_context.prediction == original.prediction
     assert gen.seen_context.features == original.features
     assert gen.seen_context.instructions_id == original.instructions_id
@@ -136,9 +134,7 @@ def test_retry_request_for_validation_failure_carries_criteria_and_feedback():
 
 def test_retry_request_for_validation_failure_without_criteria_or_feedback_is_unchanged():
     gen = _RecordingGeneration(_draft("x"))
-    workflow = SingleRetryWorkflow(
-        generation_provider=gen, validator=ScriptedValidator(_passed())
-    )
+    workflow = SingleRetryWorkflow(generation_provider=gen, validator=ScriptedValidator(_passed()))
 
     # interim pass-through validator carries neither criteria nor feedback
     workflow.run(_context("ORIGINAL PROMPT"), ValidationFailed(outcome=_failed()))
@@ -148,9 +144,7 @@ def test_retry_request_for_validation_failure_without_criteria_or_feedback_is_un
 
 def test_retry_request_for_generation_failure_is_unchanged():
     gen = _RecordingGeneration(_draft("x"))
-    workflow = SingleRetryWorkflow(
-        generation_provider=gen, validator=ScriptedValidator(_passed())
-    )
+    workflow = SingleRetryWorkflow(generation_provider=gen, validator=ScriptedValidator(_passed()))
 
     workflow.run(_context("ORIGINAL PROMPT"), GenerationFailed())
 
@@ -200,9 +194,7 @@ def test_run_performs_exactly_one_generation_and_no_third_attempt():
 
 
 def test_configuration_error_on_retry_generation_is_re_raised_not_terminal():
-    gen = ScriptedGenerationProvider(
-        ConfigurationError("Briefing generation is not configured")
-    )
+    gen = ScriptedGenerationProvider(ConfigurationError("Briefing generation is not configured"))
     workflow = SingleRetryWorkflow(generation_provider=gen, validator=ScriptedValidator())
 
     with pytest.raises(ConfigurationError):

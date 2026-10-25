@@ -21,8 +21,8 @@ import pytest
 import streamlit as st
 from streamlit.testing.v1 import AppTest
 
+from fixture_repository import MockStudentRepository
 from student_attrition_risk.models import StudentRiskProfile
-from student_attrition_risk.student_repository import MockStudentRepository
 
 APP_ROOT = Path(__file__).resolve().parent.parent
 UI_PATH = str(APP_ROOT / "src" / "student_attrition_risk" / "ui.py")
@@ -66,30 +66,33 @@ class _ProfileOnlyService:
     def __init__(self) -> None:
         self._repository = MockStudentRepository()
 
-    def get_student_profile(self, student_hash):
+    def get_overview(self):
+        return self._repository.get_predictions()
+
+    def get_student_profile(self, student_id):
         return StudentRiskProfile(
-            prediction=self._repository.get_prediction(student_hash),
-            snapshot=self._repository.get_snapshot(student_hash),
+            prediction=self._repository.get_prediction(student_id),
+            snapshot=self._repository.get_snapshot(student_id),
         )
 
-    def has_stored_briefing(self, student_hash):
+    def has_stored_briefing(self, student_id):
         return False
 
-    def get_stored_briefing(self, student_hash):
+    def get_stored_briefing(self, student_id):
         return None
 
 
 @pytest.fixture
 def loaded_page(monkeypatch):
-    """Factory: render the page and load ``student_hash`` through the Retrieve button."""
+    """Factory: render the page and load ``student_id`` through the Retrieve button."""
 
-    def _load(student_hash):
+    def _load(student_id):
         service = _ProfileOnlyService()
         monkeypatch.setattr("student_attrition_risk.main.build_service", lambda *_a, **_kw: service)
         st.cache_resource.clear()
         at = AppTest.from_file(UI_PATH, default_timeout=10)
         at.run()
-        at.text_input[0].set_value(student_hash).run()
+        at.text_input[0].set_value(student_id).run()
         next(b for b in at.button if b.label == "Retrieve").click().run()
         assert not at.exception
         return at
@@ -123,9 +126,7 @@ def _relative_luminance(hex_colour: str) -> float:
 
 
 def _contrast_ratio(foreground: str, background: str) -> float:
-    lighter, darker = sorted(
-        (_relative_luminance(foreground), _relative_luminance(background)), reverse=True
-    )
+    lighter, darker = sorted((_relative_luminance(foreground), _relative_luminance(background)), reverse=True)
     return (lighter + 0.05) / (darker + 0.05)
 
 
@@ -142,14 +143,14 @@ def _dashboard_colour_mappings(node):
 
 
 @pytest.mark.parametrize(
-    ("student_hash", "badge_class", "label"),
+    ("student_id", "badge_class", "label"),
     [
         (HASH_AT_RISK, "risk-badge", "At Risk"),
         (HASH_NOT_AT_RISK, "not-risk-badge", "Not At Risk"),
     ],
 )
-def test_badge_span_wraps_label_without_alert_widgets(loaded_page, student_hash, badge_class, label):
-    at = loaded_page(student_hash)
+def test_badge_span_wraps_label_without_alert_widgets(loaded_page, student_id, badge_class, label):
+    at = loaded_page(student_id)
 
     pattern = re.compile(rf'<span class="{badge_class}">\s*{re.escape(label)}\s*</span>')
     assert any(pattern.search(el.value) for el in at.markdown), (
@@ -179,9 +180,7 @@ def test_badge_text_contrast_is_at_least_4_5(loaded_page, badge_class):
 
 def test_badge_backgrounds_match_dashboard_colour_maps():
     definition = json.loads(DASHBOARD_PATH.read_text(encoding="utf-8"))
-    mappings = [
-        m for m in _dashboard_colour_mappings(definition) if m["value"] in DASHBOARD_LABEL_TO_BADGE
-    ]
+    mappings = [m for m in _dashboard_colour_mappings(definition) if m["value"] in DASHBOARD_LABEL_TO_BADGE]
     if not mappings:
         pytest.skip("Dashboard has no At Risk / Not At Risk (or High / Low) colour mappings")
 
@@ -194,14 +193,14 @@ def test_badge_backgrounds_match_dashboard_colour_maps():
 
 
 @pytest.mark.parametrize(
-    ("student_hash", "circle_class"),
+    ("student_id", "circle_class"),
     [
         (HASH_AT_RISK, "risk-circle"),
         (HASH_NOT_AT_RISK, "risk-circle not-risk-circle"),
     ],
 )
-def test_score_circle_uses_category_class(loaded_page, student_hash, circle_class):
-    at = loaded_page(student_hash)
+def test_score_circle_uses_category_class(loaded_page, student_id, circle_class):
+    at = loaded_page(student_id)
 
     pattern = re.compile(rf'<div class="{circle_class}">\s*[\d.]+%\s*</div>')
     assert any(pattern.search(el.value) for el in at.markdown), (

@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from fixture_repository import MODEL_FEATURE_COLUMNS, MockStudentRepository
 from student_attrition_risk.briefing_instructions import InterimInstructions
 from student_attrition_risk.briefing_provider import StubGenerationProvider
 from student_attrition_risk.briefing_store import InMemoryBriefingStore
@@ -21,7 +22,6 @@ from student_attrition_risk.models import (
     ValidationOutcome,
 )
 from student_attrition_risk.retry_workflow import RetryNotConfigured
-from student_attrition_risk.student_repository import MODEL_FEATURE_COLUMNS, MockStudentRepository
 from student_attrition_risk.student_service import (
     BriefingNotProducedError,
     BriefingStorageError,
@@ -68,7 +68,7 @@ class RaisingStore(InMemoryBriefingStore):
 
 
 def _draft(text: str = "draft body") -> DraftBriefing:
-    return DraftBriefing(student_deidentified_hash=FLAGGED, text=text)
+    return DraftBriefing(student_id=FLAGGED, text=text)
 
 
 def _service(
@@ -89,17 +89,17 @@ def _service(
     )
 
 
-def _seed_existing(store: InMemoryBriefingStore, student_hash: str, text: str = "existing") -> None:
+def _seed_existing(store: InMemoryBriefingStore, student_id: str, text: str = "existing") -> None:
     store.save_validated(
         ValidatedBriefing(
-            student_deidentified_hash=student_hash,
+            student_id=student_id,
             text=text,
             source="generated",
             validator_id="interim-pass-through",
             generated_at=datetime.now(UTC),
-            risk_percentage=64.0,
-            at_risk_flag=True,
-            prediction_threshold=0.5,
+            risk_score=64.0,
+            at_risk=True,
+            threshold_score=50.0,
         )
     )
 
@@ -113,7 +113,7 @@ def test_happy_path_assembles_context_calls_seams_in_order_and_stores():
     class RecordingInstructions(InterimInstructions):
         def compose(self, context: BriefingGenerationContext) -> str:
             seen["features"] = dict(context.features.values)
-            seen["risk"] = context.prediction.attrition_risk_percentage
+            seen["risk"] = context.prediction.risk_score
             return super().compose(context)
 
     store = InMemoryBriefingStore()
@@ -142,11 +142,11 @@ def test_happy_path_assembles_context_calls_seams_in_order_and_stores():
     assert service.get_stored_briefing(FLAGGED).source == "stored"
 
 
-def test_risk_percentage_is_carried_through_verbatim():
+def test_risk_score_is_carried_through_verbatim():
     briefing = _service().request_briefing(FLAGGED)
-    assert briefing.risk_percentage == 78.5
-    assert briefing.at_risk_flag is True
-    assert briefing.prediction_threshold == 0.5
+    assert briefing.risk_score == 78.5
+    assert briefing.at_risk is True
+    assert briefing.threshold_score == 50
 
 
 def test_at_risk_decision_uses_the_model_flag_not_a_second_threshold():
@@ -188,8 +188,9 @@ def test_explicit_regenerate_supersedes_on_success():
     store = InMemoryBriefingStore()
     _seed_existing(store, HAS_EXISTING, "old")
     service = _service(
-        generation_provider=StubGenerationProvider(draft=DraftBriefing(
-            student_deidentified_hash=HAS_EXISTING, text="fresh")),
+        generation_provider=StubGenerationProvider(
+            draft=DraftBriefing(student_id=HAS_EXISTING, text="fresh")
+        ),
         store=store,
     )
     briefing = service.request_briefing(HAS_EXISTING, regenerate=True)
@@ -236,9 +237,7 @@ def test_get_stored_briefing_unknown_hash_is_not_found():
 def test_retrieval_only_ever_sees_validated_briefings():
     # The store only accepts ValidatedBriefing; a draft/failed briefing can never reach it.
     store = InMemoryBriefingStore()
-    service = _service(
-        generation_provider=StubGenerationProvider(raises=RuntimeError("down")), store=store
-    )
+    service = _service(generation_provider=StubGenerationProvider(raises=RuntimeError("down")), store=store)
     with pytest.raises(BriefingNotProducedError):
         service.request_briefing(FLAGGED)
     assert service.get_stored_briefing(FLAGGED) is None
@@ -275,9 +274,7 @@ def test_validation_failure_hands_off_to_retry_seam_once_then_terminal_validatio
 
 def test_no_deterministic_or_template_briefing_is_returned_or_stored_on_failure():
     store = InMemoryBriefingStore()
-    service = _service(
-        generation_provider=StubGenerationProvider(raises=RuntimeError("down")), store=store
-    )
+    service = _service(generation_provider=StubGenerationProvider(raises=RuntimeError("down")), store=store)
     with pytest.raises(BriefingNotProducedError):
         service.request_briefing(FLAGGED)
     assert store.has_validated(FLAGGED) is False
@@ -287,8 +284,7 @@ def test_persistence_failure_is_surfaced_and_previous_briefing_is_intact():
     store = RaisingStore()
     _seed_existing_via_parent(store, HAS_EXISTING, "prior")
     service = _service(
-        generation_provider=StubGenerationProvider(draft=DraftBriefing(
-            student_deidentified_hash=HAS_EXISTING, text="new")),
+        generation_provider=StubGenerationProvider(draft=DraftBriefing(student_id=HAS_EXISTING, text="new")),
         store=store,
     )
     with pytest.raises(BriefingStorageError):
@@ -304,8 +300,9 @@ def test_retry_seam_is_never_invoked_by_the_normal_success_path():
 
 def test_logs_are_metadata_only_no_prompt_no_briefing_text_no_secret(caplog):
     with caplog.at_level(logging.INFO, logger="student_attrition_risk.student_service"):
-        _service(generation_provider=StubGenerationProvider(draft=_draft("SECRET BRIEFING BODY"))) \
-            .request_briefing(FLAGGED)
+        _service(
+            generation_provider=StubGenerationProvider(draft=_draft("SECRET BRIEFING BODY"))
+        ).request_briefing(FLAGGED)
     records = " ".join(r.getMessage() for r in caplog.records)
     assert "briefing_workflow" in records
     assert FLAGGED in records
@@ -316,17 +313,17 @@ def test_logs_are_metadata_only_no_prompt_no_briefing_text_no_secret(caplog):
     assert "APPROVED MODEL FEATURE VALUES" not in records
 
 
-def _seed_existing_via_parent(store: RaisingStore, student_hash: str, text: str) -> None:
+def _seed_existing_via_parent(store: RaisingStore, student_id: str, text: str) -> None:
     InMemoryBriefingStore.save_validated(
         store,
         ValidatedBriefing(
-            student_deidentified_hash=student_hash,
+            student_id=student_id,
             text=text,
             source="generated",
             validator_id="interim-pass-through",
             generated_at=datetime.now(UTC),
-            risk_percentage=64.0,
-            at_risk_flag=True,
-            prediction_threshold=0.5,
+            risk_score=64.0,
+            at_risk=True,
+            threshold_score=50.0,
         ),
     )

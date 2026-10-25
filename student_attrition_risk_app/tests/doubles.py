@@ -26,9 +26,7 @@ class ScriptedGenerationProvider:
     def generate(self, context) -> DraftBriefing:
         self.calls += 1
         if not self._actions:
-            raise AssertionError(
-                "ScriptedGenerationProvider.generate called more times than scripted"
-            )
+            raise AssertionError("ScriptedGenerationProvider.generate called more times than scripted")
         action = self._actions.pop(0)
         if isinstance(action, BaseException):
             raise action
@@ -45,9 +43,7 @@ class ScriptedValidator:
     def validate(self, draft, context) -> ValidationOutcome:
         self.calls += 1
         if not self._outcomes:
-            raise AssertionError(
-                "ScriptedValidator.validate called more times than scripted"
-            )
+            raise AssertionError("ScriptedValidator.validate called more times than scripted")
         return self._outcomes.pop(0)
 
 

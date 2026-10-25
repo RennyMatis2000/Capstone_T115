@@ -1,15 +1,16 @@
-"""Briefing-validation seam (Feature-001 / US-08).
-
-Feature-001 provides only the ``BriefingValidator`` seam plus an interim pass-through
-placeholder. It invents **no** acceptance criteria. The real Structured Advisor Briefing
-acceptance-criteria validation is owned by **US-14** and will be supplied through this same
-seam without changing the orchestration (FR-016).
-"""
+"""Deterministic briefing checks. Human review is still required for semantic correctness."""
 
 import math
 import re
 
-from .models import SUPPRESSED, UNAVAILABLE, BriefingGenerationContext, DraftBriefing, ValidationOutcome
+from .models import (
+    SUPPRESSED,
+    UNAVAILABLE,
+    BriefingGenerationContext,
+    DraftBriefing,
+    ValidationOutcome,
+    format_score,
+)
 
 # "not at risk" / "not at-risk", and "at risk" / "at-risk" as whole words.
 _NEGATED_RISK_LEVEL = re.compile(r"\bnot\s+at[\s-]risk\b")
@@ -39,9 +40,7 @@ class InterimValidator:
 
     validator_id = "interim-pass-through"
 
-    def validate(
-        self, draft: DraftBriefing, context: BriefingGenerationContext
-    ) -> ValidationOutcome:
+    def validate(self, draft: DraftBriefing, context: BriefingGenerationContext) -> ValidationOutcome:
         return ValidationOutcome(
             passed=True,
             failed_criteria=[],
@@ -49,12 +48,11 @@ class InterimValidator:
             validator_id=self.validator_id,
         )
 
+
 class StructuredBriefingValidator:
     validator_id = "structured-validator"
 
-    def validate(
-        self, draft: DraftBriefing, context: BriefingGenerationContext
-    ) -> ValidationOutcome:
+    def validate(self, draft: DraftBriefing, context: BriefingGenerationContext) -> ValidationOutcome:
         failed_criteria: list[str] = []
         feedback_parts: list[str] = []
         text_lower = draft.text.lower()
@@ -65,18 +63,17 @@ class StructuredBriefingValidator:
         # The displayed risk level and risk score must correspond to the prediction.
 
         # Student's deidentified hash is incorrect
-        if draft.student_deidentified_hash != context.student_deidentified_hash:
+        if draft.student_id != context.student_id:
             failed_criteria.append("AC1")
             feedback_parts.append(
-                "The briefing's student_deidentified_hash does not match the student "
-                "selected in the context."
+                "The briefing's student_id does not match the student selected in the context."
             )
-        
+
         # Student's risk level is not mentioned, or the opposite classification is stated.
         # "Not At Risk" contains "at risk", so the negated form is checked separately.
         says_not_at_risk = _NEGATED_RISK_LEVEL.search(text_lower) is not None
         says_at_risk = _RISK_LEVEL.search(_NEGATED_RISK_LEVEL.sub("", text_lower)) is not None
-        if context.prediction.attrition_risk_flag:
+        if context.prediction.at_risk:
             states_risk_level = says_at_risk and not says_not_at_risk
         else:
             states_risk_level = says_not_at_risk and not says_at_risk
@@ -90,12 +87,9 @@ class StructuredBriefingValidator:
 
         # Student's risk score is not mentioned. Only the score as supplied to the model
         # (one decimal place, e.g. "78.5%") counts; a bare "78" elsewhere does not.
-        risk_pct = context.prediction.attrition_risk_percentage
+        risk_pct = context.prediction.risk_score
         mentions_risk = (
-            re.search(
-                rf"(?<![\d.]){re.escape(f'{risk_pct:.1f}')}\s?%", draft.text
-            )
-            is not None
+            re.search(rf"(?<![\d.]){re.escape(format_score(risk_pct))}\s?%", draft.text) is not None
         )
         if not mentions_risk:
             if "AC1" not in failed_criteria:
@@ -167,18 +161,35 @@ class StructuredBriefingValidator:
             start = text_lower.find("suggested next steps")
             next_steps_text = text_lower[start:]
             action_words = [
-                "arrange", "schedule", "contact", "refer", "follow up",
-                "follow-up", "meet", "discuss", "review", "send", "notify",
-                "recommend", "plan", "book", "invite", "connect", "initiate",
-                "encourage", "monitor", "check-in", "check in", "explore"
+                "arrange",
+                "schedule",
+                "contact",
+                "refer",
+                "follow up",
+                "follow-up",
+                "meet",
+                "discuss",
+                "review",
+                "send",
+                "notify",
+                "recommend",
+                "plan",
+                "book",
+                "invite",
+                "connect",
+                "initiate",
+                "encourage",
+                "monitor",
+                "check-in",
+                "check in",
+                "explore",
             ]
             has_action = any(w in next_steps_text for w in action_words)
             body = next_steps_text.replace("suggested next steps", "").strip()
             if not body or not has_action:
                 failed_criteria.append("AC5")
                 feedback_parts.append(
-                    "The Suggested Next Steps section lacks actionable, task-oriented "
-                    "language."
+                    "The Suggested Next Steps section lacks actionable, task-oriented language."
                 )
             # Detect invented timeframes — the AI should not assume specific deadlines.
             timeframe_patterns = [
@@ -188,9 +199,7 @@ class StructuredBriefingValidator:
                 r"\bby\s+end\s+of\s+(today|week|month|semester)\b",
                 r"\bin\s+\d+\s+(hour|day|week|month)s?\b",
             ]
-            timeframe_found = [
-                p for p in timeframe_patterns if re.search(p, next_steps_text)
-            ]
+            timeframe_found = [p for p in timeframe_patterns if re.search(p, next_steps_text)]
             if timeframe_found:
                 failed_criteria.append("AC5")
                 feedback_parts.append(
@@ -213,11 +222,9 @@ class StructuredBriefingValidator:
             r"\b\d{8,10}\b",  # long numeric IDs (student numbers)
         ]
         # Skip the deidentified hash itself — it is expected to appear
-        hash_pattern = re.escape(draft.student_deidentified_hash)
+        hash_pattern = re.escape(draft.student_id)
         text_without_hash = re.sub(hash_pattern, "", draft.text)
-        pii_found = [
-            p for p in pii_patterns if re.search(p, text_without_hash, re.IGNORECASE)
-        ]
+        pii_found = [p for p in pii_patterns if re.search(p, text_without_hash, re.IGNORECASE)]
         if pii_found:
             failed_criteria.append("AC7")
             feedback_parts.append(
@@ -247,7 +254,9 @@ class StructuredBriefingValidator:
                 phrase = value.replace("_", " ").strip().lower()
                 if phrase and re.search(rf"\b{re.escape(phrase)}\b", text_lower):
                     feature_mentions += 1
-        if feature_mentions == 0:
+        if feature_mentions == 0 and any(
+            value not in (None, UNAVAILABLE, SUPPRESSED) for value in feature_values.values()
+        ):
             failed_criteria.append("AC8")
             feedback_parts.append(
                 "The briefing does not appear to reference the selected student's "
@@ -272,4 +281,3 @@ class StructuredBriefingValidator:
             feedback=feedback,
             validator_id=self.validator_id,
         )
-        

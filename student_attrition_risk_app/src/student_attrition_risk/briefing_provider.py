@@ -1,14 +1,15 @@
-"""Briefing generation adapters and the deterministic fallback."""
+"""Managed generation adapter and explicit unconfigured-generation failure."""
 
 from typing import Any
 
 from .config import ConfigurationError
-from .models import BriefingGenerationContext, DraftBriefing, StudentBriefing, StudentRiskProfile
+from .models import BriefingGenerationContext, DraftBriefing, StudentRiskProfile
 
 
 def _prompt(profile: StudentRiskProfile) -> str:
     return (
-        "Write a concise, neutral, supportive briefing for a human reviewer about this synthetic record. "
+        "Write a concise, neutral, supportive briefing for a human reviewer "
+        "about this operator-supplied record. "
         "Use only the supplied structured values. State that the risk is a model-generated signal, "
         "make no historical claims, and do not infer health, disability, finances, family circumstances, "
         "motivation, behaviour, or personal causes. Do not claim raw values caused the prediction. "
@@ -44,33 +45,6 @@ def _extract_response_text(content: Any) -> str:
     return ""
 
 
-class TemplateBriefingProvider:
-    def generate(self, profile: StudentRiskProfile) -> StudentBriefing:
-        prediction = profile.prediction
-        flag = "At Risk" if prediction.attrition_risk_flag else "Not At Risk"
-        text = (
-            f"Template-generated briefing for synthetic record {prediction.student_deidentified_hash}. "
-            f"The model-generated risk signal is {prediction.attrition_risk_percentage:.1f}% ({flag}), "
-            f"with a prediction threshold of {prediction.prediction_threshold:.2f}. "
-            "This is a cross-sectional signal, not a longitudinal assessment or explanation of cause. "
-            "Consider a supportive, human-reviewed check-in without assuming personal circumstances."
-        )
-        return StudentBriefing(
-            student_deidentified_hash=prediction.student_deidentified_hash,
-            source="template",
-            text=text,
-        )
-
-
-# class DatabricksModelBriefingProvider:
-#     def __init__(self, model_name: str) -> None:
-#         self.model_name = model_name
-
-#     def generate(self, profile: StudentRiskProfile) -> StudentBriefing:
-#         from databricks.sdk import WorkspaceClient
-
-
-
 class StubGenerationProvider:
     """Feature-001 (US-08) placeholder for the ``GenerationProvider`` seam.
 
@@ -103,9 +77,7 @@ class DatabricksGenerationProvider:
 
     def __init__(self, model_name: str) -> None:
         if not model_name:
-            raise ConfigurationError(
-                "DATABRICKS_MODEL_NAME is required."
-            )
+            raise ConfigurationError("DATABRICKS_MODEL_NAME is required.")
 
         self.model_name = model_name
 
@@ -121,7 +93,6 @@ class DatabricksGenerationProvider:
 
         response: Any = WorkspaceClient().serving_endpoints.query(
             name=self.model_name,
-
             messages=[
                 ChatMessage(
                     role=ChatMessageRole.USER,
@@ -135,28 +106,20 @@ class DatabricksGenerationProvider:
         choices = getattr(response, "choices", None) or []
 
         if not choices:
-            raise RuntimeError(
-                "Managed model returned no choices."
-            )
+            raise RuntimeError("Managed model returned no choices.")
 
         message = getattr(choices[0], "message", None)
 
         if message is None:
-            raise RuntimeError(
-                "Managed model returned no response message."
-            )
-        
+            raise RuntimeError("Managed model returned no response message.")
+
         content = getattr(message, "content", None)
         text = _extract_response_text(content)
 
         if not text:
-            raise RuntimeError(
-                "Managed model returned no briefing text."
-            )
+            raise RuntimeError("Managed model returned no briefing text.")
 
         return DraftBriefing(
-            student_deidentified_hash=(
-                context.student_deidentified_hash
-            ),
+            student_id=(context.student_id),
             text=text,
         )

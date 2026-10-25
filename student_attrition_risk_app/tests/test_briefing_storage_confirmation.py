@@ -17,6 +17,7 @@ import pytest
 
 import student_attrition_risk
 from doubles import ScriptedGenerationProvider, ScriptedValidator
+from fixture_repository import MockStudentRepository
 from student_attrition_risk.briefing_instructions import InterimInstructions
 from student_attrition_risk.briefing_messages import (
     existing_briefing_message,
@@ -26,7 +27,6 @@ from student_attrition_risk.briefing_messages import (
 from student_attrition_risk.briefing_store import InMemoryBriefingStore
 from student_attrition_risk.models import DraftBriefing, ValidatedBriefing, ValidationOutcome
 from student_attrition_risk.retry_workflow import SingleRetryWorkflow
-from student_attrition_risk.student_repository import MockStudentRepository
 from student_attrition_risk.student_service import BriefingStorageError, StudentService
 
 FLAGGED = "synthetic-student-001"
@@ -37,7 +37,7 @@ UI_SOURCE = Path(student_attrition_risk.__file__).parent / "ui.py"
 
 
 def _draft(text: str) -> DraftBriefing:
-    return DraftBriefing(student_deidentified_hash=FLAGGED, text=text)
+    return DraftBriefing(student_id=FLAGGED, text=text)
 
 
 def _passed() -> ValidationOutcome:
@@ -73,9 +73,7 @@ def _service(*, generation, validation, store=None):
             generation_provider=generation,
             instructions=InterimInstructions(),
             validator=validation,
-            retry_workflow=SingleRetryWorkflow(
-                generation_provider=generation, validator=validation
-            ),
+            retry_workflow=SingleRetryWorkflow(generation_provider=generation, validator=validation),
             store=store,
         ),
         store,
@@ -140,9 +138,7 @@ def test_a_retry_success_reports_exactly_what_a_first_attempt_success_reports():
         validation=ScriptedValidator(_passed()),
     )
     retry_service, _ = _service(
-        generation=ScriptedGenerationProvider(
-            _draft("rejected briefing"), _draft("attempt two briefing")
-        ),
+        generation=ScriptedGenerationProvider(_draft("rejected briefing"), _draft("attempt two briefing")),
         validation=ScriptedValidator(_failed(), _passed()),
     )
 
@@ -305,7 +301,7 @@ def test_notices_never_rely_on_colour_alone():
     source = UI_SOURCE.read_text(encoding="utf-8")
 
     assert "notice-label" in source
-    assert 'def render_notice(' in source
+    assert "def render_notice(" in source
     # Every notice goes through the renderer; none is hand-built without a label.
     assert '<div class="page-notice">' not in source
     assert '<div class="save-confirmation">' not in source
@@ -329,15 +325,15 @@ def test_the_advisor_surface_does_not_render_the_attempt_count():
 def test_the_attempt_count_is_still_carried_as_workflow_metadata():
     """SC-016, the other half: removing it from the UI must not remove it from the record."""
     briefing = ValidatedBriefing(
-        student_deidentified_hash=FLAGGED,
+        student_id=FLAGGED,
         text="briefing text",
         source="generated",
         validator_id="stub-validator",
         generated_at=datetime.now(UTC),
         attempt_count=2,
-        risk_percentage=64.0,
-        at_risk_flag=True,
-        prediction_threshold=0.5,
+        risk_score=64.0,
+        at_risk=True,
+        threshold_score=50.0,
     )
 
     payload = briefing.model_dump(mode="json")

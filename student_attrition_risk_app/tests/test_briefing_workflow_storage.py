@@ -130,13 +130,13 @@ def _non_successful_cases():
 )
 def test_write_count_is_zero_for_every_non_successful_outcome(label, factory):
     """No failing or refused outcome writes anything (FR-028, SC-007)."""
-    service, store, student_hash, regenerate, error = factory()
+    service, store, student_id, regenerate, error = factory()
 
     with pytest.raises(error):
-        service.request_briefing(student_hash, regenerate=regenerate)
+        service.request_briefing(student_id, regenerate=regenerate)
 
     assert store.saves == 0, label
-    assert store.has_validated(student_hash) is False, label
+    assert store.has_validated(student_id) is False, label
 
 
 def test_returning_an_existing_briefing_writes_nothing():
@@ -200,9 +200,7 @@ def test_nothing_unvalidated_is_stored_or_surfaced_as_validated():
     ],
     ids=["terminal-generation", "terminal-validation", "configuration-failure"],
 )
-def test_previously_stored_briefing_survives_every_failing_outcome(
-    label, generation, validation, error
-):
+def test_previously_stored_briefing_survives_every_failing_outcome(label, generation, validation, error):
     """A failed regeneration never destroys what the advisor already had (FR-030, SC-008)."""
     store = CountingStore()
     store.seed(HAS_EXISTING, "keep me")

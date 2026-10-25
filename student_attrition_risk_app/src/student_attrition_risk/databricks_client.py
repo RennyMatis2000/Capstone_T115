@@ -14,8 +14,11 @@ def create_sql_connection(settings: Settings) -> Any:
 
     kwargs: dict[str, Any] = {
         "server_hostname": settings.databricks_host,
+        "session_configuration": {"spark.sql.session.timeZone": "UTC"},
         "http_path": f"/sql/1.0/warehouses/{settings.databricks_warehouse_id}",
     }
+    if settings.databricks_host:
+        kwargs["server_hostname"] = settings.databricks_host.removeprefix("https://").rstrip("/")
     token = os.getenv("DATABRICKS_TOKEN")
     if token:
         kwargs["access_token"] = token

@@ -80,7 +80,7 @@ async def test_tool_boundary_terminal_failure_carries_the_category():
     )
 
     with pytest.raises(ToolError, match="generation"):
-        await _call_tool(mcp, "generate_student_briefing", student_hash=FLAGGED)
+        await _call_tool(mcp, "generate_student_briefing", student_id=FLAGGED)
 
 
 @pytest.mark.anyio
@@ -96,7 +96,7 @@ async def test_tool_boundary_terminal_validation_failure_carries_its_own_categor
     )
 
     with pytest.raises(ToolError, match="validation"):
-        await _call_tool(mcp, "generate_student_briefing", student_hash=FLAGGED)
+        await _call_tool(mcp, "generate_student_briefing", student_id=FLAGGED)
 
 
 @pytest.mark.anyio
@@ -113,7 +113,7 @@ async def test_tool_boundary_storage_failure_is_surfaced():
     )
 
     with pytest.raises(ToolError, match="stored"):
-        await _call_tool(mcp, "generate_student_briefing", student_hash=FLAGGED)
+        await _call_tool(mcp, "generate_student_briefing", student_id=FLAGGED)
 
 
 @pytest.mark.anyio
@@ -131,7 +131,7 @@ async def test_tool_boundary_configuration_failure_is_surfaced():
     )
 
     with pytest.raises(ToolError, match="not configured"):
-        await _call_tool(mcp, "generate_student_briefing", student_hash=FLAGGED)
+        await _call_tool(mcp, "generate_student_briefing", student_id=FLAGGED)
 
 
 # --- Read outage must not be reported as absence -----------------------------
@@ -193,7 +193,7 @@ async def test_tool_boundary_does_not_report_a_read_outage_as_absence():
     mcp = build_mcp_server(_service_with_unreadable_store(fail_on="fail_list"))
 
     with pytest.raises(BriefingStorageError):
-        await _call_tool(mcp, "get_student_briefing", student_hash=HAS_EXISTING)
+        await _call_tool(mcp, "get_student_briefing", student_id=HAS_EXISTING)
 
 
 @pytest.mark.anyio
@@ -208,9 +208,9 @@ async def test_tool_boundary_still_reports_genuine_absence_as_absence():
         )
     )
 
-    result = await _call_tool(mcp, "get_student_briefing", student_hash=HAS_EXISTING)
+    result = await _call_tool(mcp, "get_student_briefing", student_id=HAS_EXISTING)
 
-    assert result == {"available": False, "student_hash": HAS_EXISTING}
+    assert result == {"available": False, "student_id": HAS_EXISTING}
 
 
 def test_a_missing_directory_is_absence_not_an_outage():
@@ -267,9 +267,7 @@ def test_failure_path_records_are_metadata_only(caplog):
         (
             "terminal-generation",
             lambda: build_service(
-                generation=ScriptedGenerationProvider(
-                    RuntimeError(SECRET_TEXT), RuntimeError(SECRET_TEXT)
-                ),
+                generation=ScriptedGenerationProvider(RuntimeError(SECRET_TEXT), RuntimeError(SECRET_TEXT)),
                 validation=ScriptedValidator(),
             ),
             FLAGGED,
@@ -299,27 +297,23 @@ def test_failure_path_records_are_metadata_only(caplog):
         ),
         (
             "not-at-risk",
-            lambda: build_service(
-                generation=ScriptedGenerationProvider(), validation=ScriptedValidator()
-            ),
+            lambda: build_service(generation=ScriptedGenerationProvider(), validation=ScriptedValidator()),
             NOT_FLAGGED,
             False,
         ),
         (
             "not-found",
-            lambda: build_service(
-                generation=ScriptedGenerationProvider(), validation=ScriptedValidator()
-            ),
+            lambda: build_service(generation=ScriptedGenerationProvider(), validation=ScriptedValidator()),
             UNKNOWN,
             False,
         ),
     ]
 
-    for label, factory, student_hash, regenerate in cases:
+    for label, factory, student_id, regenerate in cases:
         caplog.clear()
         with caplog.at_level(logging.INFO, logger=SERVICE_LOGGER):
             try:
-                factory().request_briefing(student_hash, regenerate=regenerate)
+                factory().request_briefing(student_id, regenerate=regenerate)
             except Exception:  # noqa: BLE001 - the failure is the point; the record is the subject
                 pass
         _assert_metadata_only(rendered_log_output(caplog), label)
@@ -327,9 +321,7 @@ def test_failure_path_records_are_metadata_only(caplog):
 
 def test_none_available_retrieval_record_is_metadata_only(caplog):
     """The retrieval path's none-available record (FR-034)."""
-    service = build_service(
-        generation=ScriptedGenerationProvider(), validation=ScriptedValidator()
-    )
+    service = build_service(generation=ScriptedGenerationProvider(), validation=ScriptedValidator())
 
     with caplog.at_level(logging.INFO, logger=SERVICE_LOGGER):
         assert service.get_stored_briefing(FLAGGED) is None
