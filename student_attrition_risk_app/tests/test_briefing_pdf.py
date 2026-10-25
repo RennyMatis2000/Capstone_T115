@@ -1,24 +1,24 @@
+from fixture_repository import MockStudentRepository
 from student_attrition_risk.briefing_pdf import create_briefing_pdf
 from student_attrition_risk.models import (
     StudentRiskProfile,
     make_validated_briefing,
 )
-from student_attrition_risk.student_repository import MockStudentRepository
 
 
 def test_create_briefing_pdf_returns_pdf_bytes():
     repository = MockStudentRepository()
-    student_hash = "synthetic-student-001"
+    student_id = "synthetic-student-001"
 
-    prediction = repository.predictions[student_hash]
+    prediction = repository.predictions[student_id]
 
     profile = StudentRiskProfile(
         prediction=prediction,
-        snapshot=repository.get_snapshot(student_hash),
+        snapshot=repository.get_snapshot(student_id),
     )
 
     briefing = make_validated_briefing(
-        student_hash=student_hash,
+        student_id=student_id,
         prediction=prediction,
         text=(
             "**Risk Summary**\n"
@@ -33,9 +33,7 @@ def test_create_briefing_pdf_returns_pdf_bytes():
         ),
         validator_id="test-validator",
         attempt_count=1,
-    ).model_copy(
-        update={"storage_confirmed": True}
-    )
+    ).model_copy(update={"storage_confirmed": True})
 
     pdf = create_briefing_pdf(profile, briefing)
 

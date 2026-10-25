@@ -19,21 +19,18 @@ import pytest
 import streamlit as st
 from streamlit.testing.v1 import AppTest
 
+from fixture_repository import MockStudentRepository
 from student_attrition_risk.models import (
     StudentRiskProfile,
     make_validated_briefing,
 )
-from student_attrition_risk.student_repository import MockStudentRepository
 from student_attrition_risk.student_service import (
     BriefingNotProducedError,
     BriefingStorageError,
     StudentNotFoundError,
 )
 
-UI_PATH = str(
-    Path(__file__).resolve().parent.parent
-    / "src" / "student_attrition_risk" / "ui.py"
-)
+UI_PATH = str(Path(__file__).resolve().parent.parent / "src" / "student_attrition_risk" / "ui.py")
 
 HASH_AT_RISK = "synthetic-student-001"
 HASH_NOT_AT_RISK = "synthetic-student-002"
@@ -42,6 +39,7 @@ HASH_NOT_AT_RISK = "synthetic-student-002"
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _prediction(hash: str = HASH_AT_RISK):
     return MockStudentRepository().predictions[hash]
@@ -54,7 +52,7 @@ def _briefing(
 ):
     """Build a ``ValidatedBriefing`` for use as a fake service return value."""
     b = make_validated_briefing(
-        student_hash=hash,
+        student_id=hash,
         prediction=_prediction(hash),
         text=(
             "## Risk Summary\nThe student is at risk.\n\n"
@@ -93,30 +91,33 @@ class FakeService:
         self._retrieve_error = retrieve_error
         self._profile_error = profile_error
 
-    def get_student_profile(self, student_hash):
+    def get_overview(self):
+        return self._repository.get_predictions()
+
+    def get_student_profile(self, student_id):
         if self._profile_error:
             raise self._profile_error
-        prediction = self._repository.get_prediction(student_hash)
+        prediction = self._repository.get_prediction(student_id)
         if prediction is None:
-            raise StudentNotFoundError(student_hash)
+            raise StudentNotFoundError(student_id)
         return StudentRiskProfile(
             prediction=prediction,
-            snapshot=self._repository.get_snapshot(student_hash),
+            snapshot=self._repository.get_snapshot(student_id),
         )
 
-    def request_briefing(self, student_hash, regenerate=False):
+    def request_briefing(self, student_id, regenerate=False):
         if self._request_error:
             raise self._request_error
         if self._briefing is None:
             raise BriefingNotProducedError("generation")
         return self._briefing
 
-    def get_stored_briefing(self, student_hash):
+    def get_stored_briefing(self, student_id):
         if self._retrieve_error:
             raise self._retrieve_error
         return self._stored_briefing
 
-    def has_stored_briefing(self, student_hash):
+    def has_stored_briefing(self, student_id):
         # Called by the UI before a Regenerate to decide whether a save supersedes one (FR-039).
         return self._stored_briefing is not None
 
@@ -148,9 +149,7 @@ def _click(at, label):
         if btn.label == label:
             btn.click().run()
             return at
-    raise AssertionError(
-        f"No button '{label}'. Found: {[b.label for b in at.button]}"
-    )
+    raise AssertionError(f"No button '{label}'. Found: {[b.label for b in at.button]}")
 
 
 def _load_student(at, hash=HASH_AT_RISK):
@@ -171,13 +170,14 @@ def _button_labels(at):
 # Page load
 # ---------------------------------------------------------------------------
 
+
 def test_initial_load_shows_search_retrieve_and_dashboard_link(app):
     at = app(FakeService())
     assert at.text_input[0].label == "Student ID (de-identified)"
     assert "Retrieve" in _button_labels(at)
     # st.link_button is not a queryable AppTest attribute in streamlit 1.64;
     # the LinkButton proto lives in a column as an UnknownElement.
-    assert any(
+    assert not any(
         getattr(child.proto, "label", None) == "View Dashboard"
         for col in at.columns
         for child in col.children.values()
@@ -186,13 +186,14 @@ def test_initial_load_shows_search_retrieve_and_dashboard_link(app):
 
 def test_initial_load_shows_empty_state(app):
     at = app(FakeService())
-    assert _has_text(at, "Enter a Student ID (de-identified) from the Student Attrition Risk Overview")
+    assert _has_text(at, "Enter a Student ID (de-identified) from your configured source")
     assert len(at.error) == 0
 
 
 # ---------------------------------------------------------------------------
 # Search / Retrieve
 # ---------------------------------------------------------------------------
+
 
 def test_retrieve_empty_input_shows_error(app):
     at = app(FakeService())
@@ -218,6 +219,7 @@ def test_retrieve_service_error_shows_generic_error(app):
 # Profile display
 # ---------------------------------------------------------------------------
 
+
 def test_at_risk_student_shows_profile_with_briefing_actions(app):
     at = app(FakeService())
     _load_student(at, HASH_AT_RISK)
@@ -232,9 +234,9 @@ def test_at_risk_student_shows_profile_with_briefing_actions(app):
 def test_at_risk_student_shows_snapshot_values(app):
     at = app(FakeService())
     _load_student(at, HASH_AT_RISK)
-    assert _has_text(at, "Attendance mode")
-    assert _has_text(at, "Synthetic online")
-    assert _has_text(at, "Enrolment year")
+    assert _has_text(at, "Support Channel")
+    assert _has_text(at, "email")
+    assert _has_text(at, "Meeting Requested")
 
 
 def test_not_at_risk_student_shows_info_and_no_briefing_actions(app):
@@ -249,21 +251,21 @@ def test_not_at_risk_student_shows_info_and_no_briefing_actions(app):
 def test_low_risk_boundary_score_displays_below_threshold(app):
     repository = MockStudentRepository()
 
-    repository.predictions[HASH_NOT_AT_RISK] = (
-        repository.predictions[HASH_NOT_AT_RISK].model_copy(
-            update={"attrition_risk_percentage": 49.99999978}
-        )
+    repository.predictions[HASH_NOT_AT_RISK] = repository.predictions[HASH_NOT_AT_RISK].model_copy(
+        update={"risk_score": 49.99999978}
     )
 
     at = app(FakeService(repository=repository))
     _load_student(at, HASH_NOT_AT_RISK)
 
     assert _has_text(at, "Not At Risk")
-    assert _has_text(at, "49.9%")
+    assert _has_text(at, "49.99999978%")
+
 
 # ---------------------------------------------------------------------------
 # Generate Advisor Briefing
 # ---------------------------------------------------------------------------
+
 
 def test_generate_briefing_displays_text_metadata_and_download(app):
     at = app(FakeService(briefing=_briefing()))
@@ -276,9 +278,7 @@ def test_generate_briefing_displays_text_metadata_and_download(app):
     assert _has_text(at, "Validation:")
     assert not _has_text(at, "Attempt:")
     # Download button
-    assert any(
-        b.label == "Download Briefing" for b in at.download_button
-    )
+    assert any(b.label == "Download Briefing" for b in at.download_button)
 
 
 def test_generate_briefing_not_produced_shows_error(app):
@@ -307,20 +307,19 @@ def test_generate_briefing_generic_error_shows_error(app):
 # Retrieve Saved and review checkbox (removed from the page in 385041c)
 # ---------------------------------------------------------------------------
 
+
 def test_retrieve_saved_and_review_checkbox_are_not_rendered(app):
     at = app(FakeService(briefing=_briefing()))
     _load_student(at, HASH_AT_RISK)
     _click(at, "Generate Advisor Briefing")
     assert "Retrieve Saved" not in _button_labels(at)
-    assert not any(
-        cb.label == "I have reviewed this AI-generated briefing"
-        for cb in at.checkbox
-    )
+    assert not any(cb.label == "I have reviewed this AI-generated briefing" for cb in at.checkbox)
 
 
 # ---------------------------------------------------------------------------
 # Regenerate
 # ---------------------------------------------------------------------------
+
 
 def test_regenerate_displays_briefing(app):
     at = app(FakeService(briefing=_briefing()))
@@ -342,3 +341,32 @@ def test_regenerate_generic_error_shows_error(app):
     _load_student(at, HASH_AT_RISK)
     _click(at, "Regenerate")
     assert _has_text(at, "briefing workflow is currently unavailable", attr="error")
+
+
+def test_source_outage_clears_previous_profile_and_actions(app):
+    service = FakeService()
+    at = app(service)
+    _load_student(at)
+    assert "Generate Advisor Briefing" in _button_labels(at)
+
+    def unavailable():
+        raise RuntimeError("private source failure")
+
+    service.get_overview = unavailable
+    at.run()
+    assert "Generate Advisor Briefing" not in _button_labels(at)
+    assert "profile" not in at.session_state
+    assert _has_text(at, "Data unavailable", attr="error")
+    assert not _has_text(at, "private source failure", attr="error")
+
+
+def test_overview_empty_and_filters(app):
+    service = FakeService()
+    at = app(service)
+    at.selectbox[0].select("Not At Risk").run()
+    assert len(at.dataframe[0].value) == 1
+    assert at.dataframe[0].value.iloc[0]["student_id"] == HASH_NOT_AT_RISK
+    service.get_overview = lambda: []
+    at.run()
+    assert any("No predictions available" in el.value for el in at.info)
+    assert not at.dataframe

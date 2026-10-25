@@ -3,16 +3,39 @@
 from datetime import UTC, datetime
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_validator
 
 
 class StudentPrediction(BaseModel):
-    student_deidentified_hash: str
-    attrition_risk_percentage: float = Field(ge=0, le=100)
-    attrition_risk_flag: bool
-    prediction_threshold: float = Field(ge=0, le=1)
-    mlflow_run_id: str | None = None
+    model_config = ConfigDict(extra="forbid")
+    student_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,128}$")
+    risk_score: float = Field(ge=0, le=100, allow_inf_nan=False)
+    at_risk: StrictBool
+    threshold_score: float = Field(ge=0, le=100, allow_inf_nan=False)
+    model_reference: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{1,128}$")
     scored_at: datetime | None = None
+
+    @field_validator("risk_score", "threshold_score", mode="before")
+    @classmethod
+    def numeric_only(cls, value):
+        from decimal import Decimal
+
+        if isinstance(value, bool) or not isinstance(value, (int, float, Decimal)):
+            raise ValueError("Scores must be numeric.")
+        return value
+
+    @field_validator("scored_at")
+    @classmethod
+    def aware_timestamp(cls, value):
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("Scoring timestamp must include a timezone.")
+        return value
+
+    @model_validator(mode="after")
+    def consistent_flag(self):
+        if self.at_risk != (self.risk_score >= self.threshold_score):
+            raise ValueError("Classification must agree with score and threshold.")
+        return self
 
 
 class StudentSnapshot(BaseModel):
@@ -25,7 +48,7 @@ class StudentRiskProfile(BaseModel):
 
 
 class StudentBriefing(BaseModel):
-    student_deidentified_hash: str
+    student_id: str
     source: str
     text: str
 
@@ -51,11 +74,7 @@ SUPPRESSED = "__suppressed__"
 
 
 class ApprovedModelFeatureValues(BaseModel):
-    """The 21 approved model feature values for one deidentified student.
-
-    Ordered mapping ``feature_name -> value | UNAVAILABLE``. Carried as background
-    context only, never as a per-student causal explanation (FR-011).
-    """
+    """Operator-approved context, carried as data and never as causal evidence."""
 
     values: dict[str, Any]
 
@@ -70,7 +89,7 @@ class DraftBriefing(BaseModel):
     "The retry's generation attempt returns empty content").
     """
 
-    student_deidentified_hash: str
+    student_id: str
     text: str
 
     @field_validator("text")
@@ -84,7 +103,7 @@ class DraftBriefing(BaseModel):
 class BriefingGenerationContext(BaseModel):
     """The assembled input handed to the generation seam (FR-009)."""
 
-    student_deidentified_hash: str
+    student_id: str
     prediction: StudentPrediction
     features: ApprovedModelFeatureValues
     instructions_id: str
@@ -115,7 +134,7 @@ class ValidatedBriefing(BaseModel):
     already restamps ``source``.
     """
 
-    student_deidentified_hash: str
+    student_id: str
     text: str
     source: str
     validated: bool = True
@@ -123,10 +142,10 @@ class ValidatedBriefing(BaseModel):
     validator_id: str
     generated_at: datetime
     attempt_count: int = 1
-    mlflow_run_id: str | None = None
-    risk_percentage: float
-    at_risk_flag: bool
-    prediction_threshold: float
+    model_reference: str | None = None
+    risk_score: float
+    at_risk: bool
+    threshold_score: float
     scored_at: datetime | None = None
 
 
@@ -165,7 +184,7 @@ BriefingOutcome = Produced | TerminalFailure
 
 def make_validated_briefing(
     *,
-    student_hash: str,
+    student_id: str,
     prediction: StudentPrediction,
     text: str,
     validator_id: str,
@@ -180,16 +199,22 @@ def make_validated_briefing(
     to ``"stored"``.
     """
     return ValidatedBriefing(
-        student_deidentified_hash=student_hash,
+        student_id=student_id,
         text=text,
         source="generated",
         validated=True,
         validator_id=validator_id,
         generated_at=generated_at or datetime.now(UTC),
         attempt_count=attempt_count,
-        mlflow_run_id=prediction.mlflow_run_id,
-        risk_percentage=prediction.attrition_risk_percentage,
-        at_risk_flag=prediction.attrition_risk_flag,
-        prediction_threshold=prediction.prediction_threshold,
+        model_reference=prediction.model_reference,
+        risk_score=prediction.risk_score,
+        at_risk=prediction.at_risk,
+        threshold_score=prediction.threshold_score,
         scored_at=prediction.scored_at,
     )
+
+
+def format_score(value: float) -> str:
+    """Keep concise exact tenths, otherwise retain the supplied float's precision."""
+    rounded = f"{value:.1f}"
+    return rounded if float(rounded) == value else str(value)

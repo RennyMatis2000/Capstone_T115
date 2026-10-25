@@ -20,24 +20,36 @@ def create_mcp_server(service: StudentService) -> Any:
     mcp = FastMCP("student-attrition-risk")
 
     @mcp.tool()
-    def get_student_prediction(student_hash: str) -> dict[str, Any]:
-        profile = service.get_student_profile(student_hash)
-        return profile.prediction.model_dump(mode="json")
+    def get_student_prediction(student_id: str) -> dict[str, Any]:
+        try:
+            return service.get_student_profile(student_id).prediction.model_dump(mode="json")
+        except StudentNotFoundError:
+            raise ToolError("student ID not found") from None
+        except Exception:
+            raise ToolError("Prediction source unavailable. Review data setup.") from None
 
     @mcp.tool()
-    def get_student_profile(student_hash: str) -> dict[str, Any]:
-        return service.get_student_profile(student_hash).model_dump(mode="json")
+    def get_student_profile(student_id: str) -> dict[str, Any]:
+        try:
+            return service.get_student_profile(student_id).model_dump(mode="json")
+        except StudentNotFoundError:
+            raise ToolError("student ID not found") from None
+        except Exception:
+            raise ToolError("Prediction source unavailable. Review data setup.") from None
 
     @mcp.tool()
     def get_high_risk_students(limit: int = 20) -> list[dict[str, Any]]:
-        return [prediction.model_dump(mode="json") for prediction in service.get_high_risk_students(limit)]
+        try:
+            return [p.model_dump(mode="json") for p in service.get_high_risk_students(limit)]
+        except Exception:
+            raise ToolError("Prediction source unavailable or invalid limit.") from None
 
     @mcp.tool()
-    def generate_student_briefing(student_hash: str, regenerate: bool = False) -> dict[str, Any]:
+    def generate_student_briefing(student_id: str, regenerate: bool = False) -> dict[str, Any]:
         try:
-            return service.request_briefing(student_hash, regenerate=regenerate).model_dump(mode="json")
+            return service.request_briefing(student_id, regenerate=regenerate).model_dump(mode="json")
         except StudentNotFoundError as exc:
-            raise ToolError("student hash not found") from exc
+            raise ToolError("student ID not found") from exc
         except StudentNotAtRiskError as exc:
             raise ToolError("student is not flagged at risk") from exc
         except BriefingNotProducedError as exc:
@@ -52,17 +64,17 @@ def create_mcp_server(service: StudentService) -> Any:
             raise ToolError("databricks data source unavailable") from exc
 
     @mcp.tool()
-    def get_student_briefing(student_hash: str) -> dict[str, Any]:
+    def get_student_briefing(student_id: str) -> dict[str, Any]:
         try:
-            briefing = service.get_stored_briefing(student_hash)
+            briefing = service.get_stored_briefing(student_id)
         except StudentNotFoundError as exc:
-            raise ToolError("student hash not found") from exc
+            raise ToolError("student ID not found") from exc
         except BriefingStorageError:
             raise BriefingStorageError("validated briefing store unavailable") from None
         except Exception as exc:
             raise ToolError("validated briefing store unavailable") from exc
         if briefing is None:
-            return {"available": False, "student_hash": student_hash}
+            return {"available": False, "student_id": student_id}
         return briefing.model_dump(mode="json")
 
     return mcp

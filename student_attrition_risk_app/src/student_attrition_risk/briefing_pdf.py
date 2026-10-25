@@ -26,28 +26,11 @@ from .models import (
     UNAVAILABLE,
     StudentRiskProfile,
     ValidatedBriefing,
+    format_score,
 )
-from .student_repository import STUDENT_ID_LENGTH
 
 # Keep these labels aligned with ui.py.
-LABELS = {
-    "age_band": "Age band",
-    "attendance_mode": "Attendance mode",
-    "course_admission_load_category": "Study load",
-    "eftsl": "EFTSL",
-    "enrolment_year": "Enrolment year",
-    "commencing_continuing": "Student stage",
-    "commencing_continuing_period": "Commencing/continuing period",
-    "international_domestic_student": "International/domestic",
-    "cumulative_credit_points_enrolled": "Credit points enrolled",
-    "cumulative_credit_points_passed": "Credit points passed",
-    "cumulative_credit_points_failed": "Credit points failed",
-    "cumulative_credit_points_withdrawn": "Credit points withdrawn",
-    "course_group": "Course Group",
-    "broad_primary_field_of_education": "Field of Education",
-    "socioeconomic_status": "Socioeconomic Status",
-    "regional_remote_status": "Regional or Remote Status",
-}
+LABELS = {}
 
 BRIEFING_HEADINGS = {
     "Risk Summary",
@@ -70,20 +53,20 @@ def _normalise_text(value: Any) -> str:
     text = str(value)
 
     replacements = {
-      "\u00a0": " ",
-      "\u202f": " ",
-      "\u2010": "-",  # hyphen
-      "\u2011": "-",  # non-breaking hyphen
-      "\u2012": "-",  # figure dash
-      "\u2013": "-",  # en dash
-      "\u2014": "-",  # em dash
-      "\u2212": "-",  # minus sign
-      "\u2018": "'",
-      "\u2019": "'",
-      "\u201c": '"',
-      "\u201d": '"',
+        "\u00a0": " ",
+        "\u202f": " ",
+        "\u2010": "-",  # hyphen
+        "\u2011": "-",  # non-breaking hyphen
+        "\u2012": "-",  # figure dash
+        "\u2013": "-",  # en dash
+        "\u2014": "-",  # em dash
+        "\u2212": "-",  # minus sign
+        "\u2018": "'",
+        "\u2019": "'",
+        "\u201c": '"',
+        "\u201d": '"',
     }
-    
+
     for original, replacement in replacements.items():
         text = text.replace(original, replacement)
 
@@ -130,7 +113,7 @@ def _heading_from_line(line: str) -> str | None:
 
     for prefix in ("### ", "## ", "# "):
         if stripped.startswith(prefix):
-            candidate = stripped[len(prefix):].strip()
+            candidate = stripped[len(prefix) :].strip()
             return candidate if candidate in BRIEFING_HEADINGS else None
 
     if stripped.startswith("**") and stripped.endswith("**"):
@@ -367,8 +350,7 @@ def _draw_footer(canvas, doc) -> None:
     canvas.drawString(
         doc.leftMargin,
         8 * mm,
-        "Deidentified student information. "
-        "AI-generated briefing - review before taking action.",
+        "Deidentified student information. AI-generated briefing - review before taking action.",
     )
 
     canvas.drawRightString(
@@ -428,15 +410,14 @@ def create_briefing_pdf(
     )
     story.append(
         Paragraph(
-            "Review model-generated risk information and prepare a supportive, "
-            "human-led response.",
+            "Review model-generated risk information and prepare a supportive, human-led response.",
             styles["subtitle"],
         )
     )
 
     prediction = profile.prediction
-    risk_label = "At Risk" if prediction.attrition_risk_flag else "Not At Risk"
-    threshold_percentage = prediction.prediction_threshold * 100
+    risk_label = "At Risk" if prediction.at_risk else "Not At Risk"
+    threshold_percentage = prediction.threshold_score
 
     summary_left = [
         Paragraph("STUDENT SUMMARY", styles["eyebrow"]),
@@ -445,12 +426,11 @@ def create_briefing_pdf(
             styles["summary"],
         ),
         Paragraph(
-            "Student ID (de-identified): "
-            f"{escape(prediction.student_deidentified_hash[:STUDENT_ID_LENGTH])}",
+            f"Student ID (de-identified): {escape(prediction.student_id)}",
             styles["meta"],
         ),
         Paragraph(
-            f"Decision threshold: {threshold_percentage:.1f}%"
+            f"Decision threshold: {format_score(threshold_percentage)}%"
             f"<br/>Scored: {escape(_format_datetime(prediction.scored_at))}",
             styles["meta"],
         ),
@@ -459,7 +439,7 @@ def create_briefing_pdf(
     summary_right = [
         Paragraph("RELATIVE RISK SCORE", styles["risk_label"]),
         Paragraph(
-            f"{prediction.attrition_risk_percentage:.1f}%",
+            f"{format_score(prediction.risk_score)}%",
             styles["risk_score"],
         ),
     ]

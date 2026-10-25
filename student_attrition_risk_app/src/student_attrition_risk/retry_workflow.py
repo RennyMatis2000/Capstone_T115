@@ -105,7 +105,7 @@ class SingleRetryWorkflow:
             return TerminalFailure(category="validation")  # Attempt 2 briefing rejected (FR-013)
 
         briefing = make_validated_briefing(
-            student_hash=context.student_deidentified_hash,
+            student_id=context.student_id,
             prediction=context.prediction,
             text=draft.text,
             validator_id=outcome.validator_id,

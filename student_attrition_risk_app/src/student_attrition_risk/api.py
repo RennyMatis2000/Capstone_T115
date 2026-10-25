@@ -22,6 +22,8 @@ def create_api(service: StudentService) -> FastAPI:
     def health() -> HealthStatus:
         try:
             return service.health_check()
+        except ConfigurationError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from None
         except Exception as exc:
             raise HTTPException(status_code=503, detail="Databricks data source unavailable") from exc
 
@@ -29,33 +31,35 @@ def create_api(service: StudentService) -> FastAPI:
     def high_risk(limit: int = Query(default=20, ge=1, le=100)) -> list[StudentPrediction]:
         try:
             return service.get_high_risk_students(limit)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ConfigurationError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from None
         except Exception as exc:
             raise HTTPException(status_code=503, detail="Databricks data source unavailable") from exc
 
-    @router.get("/students/{student_hash}", response_model=StudentRiskProfile)
+    @router.get("/students/{student_id}", response_model=StudentRiskProfile)
     def student(
-        student_hash: str = Path(min_length=1, max_length=256),
+        student_id: str = Path(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"),
     ) -> StudentRiskProfile:
         try:
-            return service.get_student_profile(student_hash)
+            return service.get_student_profile(student_id)
         except StudentNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="Student hash not found") from exc
+            raise HTTPException(status_code=404, detail="Student ID not found") from exc
+        except ConfigurationError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from None
         except Exception as exc:
             raise HTTPException(status_code=503, detail="Databricks data source unavailable") from exc
 
-    @router.post("/students/{student_hash}/briefing", response_model=ValidatedBriefing)
+    @router.post("/students/{student_id}/briefing", response_model=ValidatedBriefing)
     def request_briefing(
-        student_hash: str = Path(min_length=1, max_length=256),
+        student_id: str = Path(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"),
         regenerate: bool = Query(default=False),
     ) -> ValidatedBriefing:
         """Get-or-create: return the existing validated briefing if one exists, otherwise
         run the generation seams. ``?regenerate=true`` forces a fresh run."""
         try:
-            return service.request_briefing(student_hash, regenerate=regenerate)
+            return service.request_briefing(student_id, regenerate=regenerate)
         except StudentNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="Student hash not found") from exc
+            raise HTTPException(status_code=404, detail="Student ID not found") from exc
         except StudentNotAtRiskError as exc:
             raise HTTPException(status_code=409, detail="Student is not flagged at risk") from exc
         except BriefingNotProducedError as exc:
@@ -63,30 +67,24 @@ def create_api(service: StudentService) -> FastAPI:
                 status_code=502, detail=f"Briefing could not be produced ({exc.category})"
             ) from exc
         except BriefingStoreUnavailableError as exc:
-            raise HTTPException(
-                status_code=503, detail="Validated briefing store unavailable"
-            ) from exc
+            raise HTTPException(status_code=503, detail="Validated briefing store unavailable") from exc
         except BriefingStorageError as exc:
-            raise HTTPException(
-                status_code=503, detail="Validated briefing could not be stored"
-            ) from exc
+            raise HTTPException(status_code=503, detail="Validated briefing could not be stored") from exc
         except ConfigurationError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=503, detail="Databricks data source unavailable") from exc
 
-    @router.get("/students/{student_hash}/briefing", response_model=ValidatedBriefing)
+    @router.get("/students/{student_id}/briefing", response_model=ValidatedBriefing)
     def stored_briefing(
-        student_hash: str = Path(min_length=1, max_length=256),
+        student_id: str = Path(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"),
     ) -> ValidatedBriefing:
         try:
-            briefing = service.get_stored_briefing(student_hash)
+            briefing = service.get_stored_briefing(student_id)
         except StudentNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="Student hash not found") from exc
+            raise HTTPException(status_code=404, detail="Student ID not found") from exc
         except Exception as exc:
-            raise HTTPException(
-                status_code=503, detail="Validated briefing store unavailable"
-            ) from exc
+            raise HTTPException(status_code=503, detail="Validated briefing store unavailable") from exc
         if briefing is None:
             raise HTTPException(status_code=404, detail="No validated briefing available")
         return briefing

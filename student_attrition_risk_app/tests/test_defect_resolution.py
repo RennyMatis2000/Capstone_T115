@@ -20,9 +20,9 @@ from fastmcp import Client
 from fastmcp.exceptions import ToolError
 from streamlit.testing.v1 import AppTest
 
+from fixture_repository import MockStudentRepository
 from student_attrition_risk.config import ConfigurationError
 from student_attrition_risk.models import ValidationOutcome
-from student_attrition_risk.student_repository import MockStudentRepository
 from student_attrition_risk.student_service import (
     BriefingNotProducedError,
     BriefingStorageError,
@@ -153,12 +153,6 @@ def test_b2_validator_configuration_error_is_surfaced_unchanged(actions):
     assert store.saves == 0
 
 
-
-
-
-
-
-
 # ---- B4: unrelated files in a student's Volume folder hide the briefing (register B4) ----
 
 B4_STUDENT = "synthetic-student-b4"
@@ -212,22 +206,16 @@ def test_b4_unrelated_files_are_ignored_without_logging(caplog):
     assert caplog.records == []
 
 
-
-
-
-
-
-
 # ---- C3: briefing tools leak raw backend error text (register C3, Renny half) ----
 
 
 class _UnreadableStore:
     """C3: a store whose every read fails with a message naming an internal Volume path."""
 
-    def has_validated(self, student_hash):
+    def has_validated(self, student_id):
         raise BriefingStorageError("could not list stored briefings for /Volumes/secret/path")
 
-    def get_latest_validated(self, student_hash):
+    def get_latest_validated(self, student_id):
         raise BriefingStorageError("could not list stored briefings for /Volumes/secret/path")
 
     def save_validated(self, briefing):
@@ -237,14 +225,14 @@ class _UnreadableStore:
 class _BrokenStore(_UnreadableStore):
     """C3: a store read failing with an unexpected, non-storage exception."""
 
-    def get_latest_validated(self, student_hash):
+    def get_latest_validated(self, student_id):
         raise RuntimeError("warehouse xyz exploded")
 
 
 class _ExplodingFeaturesRepository(MockStudentRepository):
     """C3: a repository that fails outside the generation workflow with warehouse text."""
 
-    def get_model_features(self, student_hash):
+    def get_model_features(self, student_id):
         raise RuntimeError("warehouse xyz exploded")
 
 
@@ -270,7 +258,7 @@ async def test_c3_get_student_briefing_store_read_failure_is_safe():
     mcp = _c3_mcp(store=_UnreadableStore())
 
     with pytest.raises(BriefingStorageError) as caught:
-        await _c3_call(mcp, "get_student_briefing", student_hash=FLAGGED)
+        await _c3_call(mcp, "get_student_briefing", student_id=FLAGGED)
 
     assert str(caught.value) == "validated briefing store unavailable"
     assert caught.value.__cause__ is None
@@ -282,7 +270,7 @@ async def test_c3_get_student_briefing_other_failure_is_safe():
     mcp = _c3_mcp(store=_BrokenStore())
 
     with pytest.raises(ToolError) as caught:
-        await _c3_call(mcp, "get_student_briefing", student_hash=FLAGGED)
+        await _c3_call(mcp, "get_student_briefing", student_id=FLAGGED)
 
     assert str(caught.value) == "validated briefing store unavailable"
     assert "warehouse" not in str(caught.value)
@@ -309,7 +297,7 @@ async def test_c3_get_student_briefing_other_failure_is_safe():
 async def test_c3_mcp_client_receives_only_the_safe_message(tool, mcp_kwargs, expected, leak):
     """What FastMCP actually forwards to a client over the protocol."""
     async with Client(_c3_mcp(**mcp_kwargs)) as client:
-        result = await client.call_tool(tool, {"student_hash": FLAGGED}, raise_on_error=False)
+        result = await client.call_tool(tool, {"student_id": FLAGGED}, raise_on_error=False)
 
     text = " ".join(block.text for block in result.content)
     assert result.is_error
@@ -322,7 +310,7 @@ async def test_c3_generate_student_briefing_data_source_failure_is_safe():
     mcp = _c3_mcp(repository=_ExplodingFeaturesRepository())
 
     with pytest.raises(ToolError) as caught:
-        await _c3_call(mcp, "generate_student_briefing", student_hash=FLAGGED)
+        await _c3_call(mcp, "generate_student_briefing", student_id=FLAGGED)
 
     assert str(caught.value) == "databricks data source unavailable"
     assert "warehouse" not in str(caught.value)
@@ -330,18 +318,18 @@ async def test_c3_generate_student_briefing_data_source_failure_is_safe():
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    ("tool", "student_hash", "expected"),
+    ("tool", "student_id", "expected"),
     [
-        ("generate_student_briefing", UNKNOWN, "student hash not found"),
-        ("get_student_briefing", UNKNOWN, "student hash not found"),
+        ("generate_student_briefing", UNKNOWN, "student ID not found"),
+        ("get_student_briefing", UNKNOWN, "student ID not found"),
         ("generate_student_briefing", NOT_FLAGGED, "student is not flagged at risk"),
     ],
 )
-async def test_c3_safely_mapped_failures_are_unchanged(tool, student_hash, expected):
+async def test_c3_safely_mapped_failures_are_unchanged(tool, student_id, expected):
     mcp = _c3_mcp()
 
     with pytest.raises(ToolError) as caught:
-        await _c3_call(mcp, tool, student_hash=student_hash)
+        await _c3_call(mcp, tool, student_id=student_id)
 
     assert str(caught.value) == expected
 
@@ -349,21 +337,13 @@ async def test_c3_safely_mapped_failures_are_unchanged(tool, student_hash, expec
 @pytest.mark.anyio
 async def test_c3_configuration_failure_keeps_its_own_text():
     mcp = _c3_mcp(
-        generation=ScriptedGenerationProvider(
-            ConfigurationError("Briefing generation is not configured")
-        )
+        generation=ScriptedGenerationProvider(ConfigurationError("Briefing generation is not configured"))
     )
 
     with pytest.raises(ToolError) as caught:
-        await _c3_call(mcp, "generate_student_briefing", student_hash=FLAGGED)
+        await _c3_call(mcp, "generate_student_briefing", student_id=FLAGGED)
 
     assert str(caught.value) == "briefing generation is not configured"
-
-
-
-
-
-
 
 
 # ---- B1: store read outage reported as "could not be stored" (register B1) ----
@@ -391,9 +371,7 @@ def _b1_service(store=None):
 @pytest.mark.parametrize("regenerate", [False, True])
 def test_b1_store_read_failure_raises_store_unavailable_without_generating(regenerate):
     service, gen, store = _b1_service()
-    request = (
-        service.has_stored_briefing if regenerate else service.request_briefing
-    )
+    request = service.has_stored_briefing if regenerate else service.request_briefing
 
     with pytest.raises(BriefingStoreUnavailableError) as caught:
         request(FLAGGED)
@@ -431,7 +409,7 @@ async def test_b1_generate_tool_store_read_failure_is_store_unavailable():
     service, _, _ = _b1_service()
 
     with pytest.raises(ToolError) as caught:
-        await _c3_call(build_mcp_server(service), "generate_student_briefing", student_hash=FLAGGED)
+        await _c3_call(build_mcp_server(service), "generate_student_briefing", student_id=FLAGGED)
 
     assert str(caught.value) == "validated briefing store unavailable"
 
@@ -446,7 +424,7 @@ async def test_b1_write_failure_is_still_could_not_be_stored():
 
     service, _, store = _b1_service(CountingStore(raise_on_save=True))
     with pytest.raises(ToolError) as caught:
-        await _c3_call(build_mcp_server(service), "generate_student_briefing", student_hash=FLAGGED)
+        await _c3_call(build_mcp_server(service), "generate_student_briefing", student_id=FLAGGED)
     assert str(caught.value) == "validated briefing could not be stored"
 
 

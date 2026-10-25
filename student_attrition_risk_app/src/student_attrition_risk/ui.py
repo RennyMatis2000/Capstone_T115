@@ -17,8 +17,8 @@ from student_attrition_risk.main import build_service
 from student_attrition_risk.models import (
     SUPPRESSED,
     UNAVAILABLE,
+    format_score,
 )
-from student_attrition_risk.student_repository import STUDENT_ID_LENGTH
 from student_attrition_risk.student_service import (
     BriefingNotProducedError,
     BriefingStorageError,
@@ -39,13 +39,9 @@ st.set_page_config(
 
 top_left, top_right = st.columns([4, 1])
 
-with top_right:
-    st.link_button(
-        "View Dashboard",
-        "https://dbc-d9f16845-692d.cloud.databricks.com/dashboardsv3/01f1b232102f1045b5d3828ffc7abc0a/published?o=7474649460131169",
-        type="primary",
-        use_container_width=True,
-    )
+# The external dashboard is withheld until its platform failure/cache behaviour is verified.
+# The app's live overview below uses the same validated repository as profile selection.
+
 
 @st.cache_resource
 def get_service():
@@ -383,21 +379,8 @@ st.markdown(
 # Display helpers
 # ---------------------------------------------------------------------------
 
-SNAPSHOT_LABELS = {
-    "course_group": "Course Level",
-    "broad_primary_field_of_education": (
-        "Field of Education"
-    ),
-    "international_domestic_student": (
-        "Student Category"
-    ),
-    "socioeconomic_status": (
-        "Socioeconomic Status"
-    ),
-    "regional_remote_status": (
-        "Regional or Remote Status"
-    ),
-}
+SNAPSHOT_LABELS = {}
+
 
 def _snapshot_label(name: str) -> str:
     return SNAPSHOT_LABELS.get(
@@ -405,20 +388,9 @@ def _snapshot_label(name: str) -> str:
         name.replace("_", " ").title(),
     )
 
-LABELS = {
-    "age_band": "Age band",
-    "attendance_mode": "Attendance mode",
-    "course_admission_load_category": "Study load",
-    "eftsl": "EFTSL",
-    "enrolment_year": "Enrolment year",
-    "commencing_continuing": "Student stage",
-    "commencing_continuing_period": "Commencing/continuing period",
-    "international_domestic_student": "International/domestic",
-    "cumulative_credit_points_enrolled": "Credit points enrolled",
-    "cumulative_credit_points_passed": "Credit points passed",
-    "cumulative_credit_points_failed": "Credit points failed",
-    "cumulative_credit_points_withdrawn": "Credit points withdrawn",
-}
+
+LABELS = {}
+
 
 def display_label(name: str) -> str:
     return LABELS.get(name, name.replace("_", " ").title())
@@ -450,10 +422,10 @@ def clear_selected_student() -> None:
         st.session_state.pop(key, None)
 
 
-def load_student(student_hash: str) -> None:
-    profile = service.get_student_profile(student_hash)
+def load_student(student_id: str) -> None:
+    profile = service.get_student_profile(student_id)
     st.session_state.profile = profile
-    st.session_state.selected_hash = student_hash
+    st.session_state.selected_hash = student_id
     st.session_state.briefing = None
     st.session_state.reviewed = False
     st.session_state.pop("ui_success", None)
@@ -479,16 +451,16 @@ def request_briefing(*, regenerate: bool = False) -> None:
     if profile is None:
         return
 
-    student_hash = profile.prediction.student_deidentified_hash
+    student_id = profile.prediction.student_id
 
     # Whether a successful regeneration will supersede an existing briefing (FR-039). Only the
     # regenerate path is ambiguous from the result alone, so this is the only path that pays for
     # the extra store read: without ``regenerate`` the service returns any briefing the student
     # already has rather than generating, so a briefing it generates is necessarily a first save.
     try:
-        replaced = regenerate and service.has_stored_briefing(student_hash)
+        replaced = regenerate and service.has_stored_briefing(student_id)
 
-        briefing = service.request_briefing(student_hash, regenerate=regenerate)
+        briefing = service.request_briefing(student_id, regenerate=regenerate)
     except BriefingStoreUnavailableError:
         # The store could not be read, so nothing was generated or saved (B1): say so in red,
         # not "could not be stored". Returning lets the caller's rerun render the notice.
@@ -520,9 +492,7 @@ def retrieve_stored_briefing() -> None:
     if profile is None:
         return
 
-    briefing = service.get_stored_briefing(
-        profile.prediction.student_deidentified_hash
-    )
+    briefing = service.get_stored_briefing(profile.prediction.student_id)
 
     st.session_state.pop("ui_success", None)
 
@@ -547,9 +517,7 @@ def render_snapshot(attributes: dict[str, Any]) -> None:
 
     if not available:
         st.markdown(
-            '<div class="empty-state">'
-            "No approved snapshot information is available."
-            "</div>",
+            '<div class="empty-state">No approved snapshot information is available.</div>',
             unsafe_allow_html=True,
         )
         return
@@ -592,20 +560,51 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-query_hash = st.query_params.get("student_hash", "")
-default_hash = (
-    query_hash
-    or st.session_state.get("selected_hash", "")
-)
+try:
+    overview = service.get_overview()
+    # Re-read a selected profile on each rerun, including before any briefing action.
+    if st.session_state.get("profile") is not None:
+        selected = st.session_state.profile.prediction.student_id
+        st.session_state.profile = service.get_student_profile(selected)
+except Exception:
+    clear_selected_student()
+    st.error("Data unavailable. Configure the prediction source and SQL access, then refresh.")
+    st.stop()
+
+total, flagged = len(overview), sum(p.at_risk for p in overview)
+st.metric("Total students", total)
+st.metric("At risk", flagged)
+st.metric("Not at risk", total - flagged)
+if not overview:
+    st.info("No predictions available in the configured source.")
+else:
+    category = st.selectbox("Risk classification", ["All", "At Risk", "Not At Risk"])
+    minimum = st.slider("Minimum risk score", min_value=0, max_value=100, value=0)
+    visible = [
+        p
+        for p in overview
+        if p.risk_score >= minimum and (category == "All" or p.at_risk == (category == "At Risk"))
+    ]
+    st.dataframe(
+        [p.model_dump(include={"student_id", "risk_score", "at_risk", "threshold_score"}) for p in visible],
+        hide_index=True,
+    )
+    if visible:
+        st.bar_chart(
+            {"At Risk": sum(p.at_risk for p in visible), "Not At Risk": sum(not p.at_risk for p in visible)}
+        )
+
+query_hash = st.query_params.get("student_id", "")
+default_hash = query_hash or st.session_state.get("selected_hash", "")
 
 with st.container(border=True):
     search_column, button_column = st.columns([5, 1])
 
     with search_column:
-        student_hash = st.text_input(
+        student_id = st.text_input(
             "Student ID (de-identified)",
             value=default_hash,
-            placeholder="Enter a Student ID (de-identified) from the dashboard (View Dashboard)",
+            placeholder="Enter a Student ID (de-identified) from your configured source",
             label_visibility="collapsed",
         )
 
@@ -617,21 +616,18 @@ with st.container(border=True):
         )
 
 if retrieve_student:
-    if not student_hash.strip():
+    if not student_id.strip():
         st.error("Enter a Student ID (de-identified).")
     else:
         clear_selected_student()
 
         try:
-            load_student(student_hash.strip())
+            load_student(student_id.strip())
             st.rerun()
         except StudentNotFoundError:
             st.error("No prediction was found for that Student ID (de-identified).")
         except Exception:
-            st.error(
-                "Student information is currently unavailable. "
-                "Please try again later."
-            )
+            st.error("Student information is currently unavailable. Please try again later.")
 
 
 # ---------------------------------------------------------------------------
@@ -644,8 +640,8 @@ if profile is None:
     st.markdown(
         """
         <div class="empty-state">
-            Enter a Student ID (de-identified) from the Student Attrition Risk Overview dashboard
-            (View Dashboard) to view the risk snapshot and advisor briefing.
+            Enter a Student ID (de-identified) from your configured source
+            to view the risk snapshot and advisor briefing.
         </div>
         """,
         unsafe_allow_html=True,
@@ -654,35 +650,13 @@ if profile is None:
 
 
 prediction = profile.prediction
-risk_label = "At Risk" if prediction.attrition_risk_flag else "Not At Risk"
-badge_class = (
-    "risk-badge"
-    if prediction.attrition_risk_flag
-    else "not-risk-badge"
-)
-circle_class = (
-    "risk-circle"
-    if prediction.attrition_risk_flag
-    else "risk-circle not-risk-circle"
-)
-card_class = (
-    "summary-card"
-    if prediction.attrition_risk_flag
-    else "summary-card not-risk-card"
-)
-risk_score = prediction.attrition_risk_percentage
-threshold_percentage = prediction.prediction_threshold * 100
-
-rounded_score = round(risk_score, 1)
-
-if (
-    not prediction.attrition_risk_flag
-    and risk_score < threshold_percentage
-    and rounded_score >= threshold_percentage
-):
-    risk_score_display = threshold_percentage - 0.1
-else:
-    risk_score_display = rounded_score
+risk_label = "At Risk" if prediction.at_risk else "Not At Risk"
+badge_class = "risk-badge" if prediction.at_risk else "not-risk-badge"
+circle_class = "risk-circle" if prediction.at_risk else "risk-circle not-risk-circle"
+card_class = "summary-card" if prediction.at_risk else "summary-card not-risk-card"
+risk_score = prediction.risk_score
+risk_score_display = risk_score
+threshold_percentage = prediction.threshold_score
 
 summary_left, summary_right = st.columns([5, 1.25])
 
@@ -699,11 +673,11 @@ with summary_left:
             </div>
             <div class="student-meta">
                 Student ID (de-identified):
-                {html.escape(prediction.student_deidentified_hash[:STUDENT_ID_LENGTH])}
+                {html.escape(prediction.student_id)}
             </div>
             <div class="student-meta">
                 Decision threshold:
-                {threshold_percentage:.1f}%
+                {format_score(threshold_percentage)}%
                 &nbsp;·&nbsp;
                 Scored:
                 {safe(prediction.scored_at)}
@@ -718,7 +692,7 @@ with summary_right:
         f"""
         <div class="section-card risk-panel">
             <div class="risk-label">Relative risk score</div>
-            <div class="{circle_class}">{risk_score_display:.1f}%</div>
+            <div class="{circle_class}">{format_score(risk_score_display)}%</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -765,7 +739,7 @@ with left_column:
         unsafe_allow_html=True,
     )
 
-    if prediction.attrition_risk_flag:
+    if prediction.at_risk:
         if st.button(
             "Generate Advisor Briefing",
             type="primary",
@@ -776,18 +750,11 @@ with left_column:
                     request_briefing(regenerate=False)
                     st.rerun()
                 except BriefingNotProducedError as exc:
-                    st.error(
-                        "A briefing could not be produced "
-                        f"({exc.category})."
-                    )
+                    st.error(f"A briefing could not be produced ({exc.category}).")
                 except BriefingStorageError:
-                    st.error(
-                        "The briefing was generated but could not be stored."
-                    )
+                    st.error("The briefing was generated but could not be stored.")
                 except Exception:
-                    st.error(
-                        "The briefing workflow is currently unavailable."
-                    )
+                    st.error("The briefing workflow is currently unavailable.")
 
         # retrieve_column, regenerate_column = st.columns(2)
 
@@ -814,23 +781,15 @@ with left_column:
                     request_briefing(regenerate=True)
                     st.rerun()
                 except BriefingNotProducedError as exc:
-                    st.error(
-                        "A new briefing could not be produced "
-                        f"({exc.category})."
-                    )
+                    st.error(f"A new briefing could not be produced ({exc.category}).")
                 except BriefingStorageError:
-                    st.error(
-                        "The briefing was generated but could not be stored."
-                    )
+                    st.error("The briefing was generated but could not be stored.")
                 except Exception:
-                    st.error(
-                        "The briefing workflow is currently unavailable."
-                    )
+                    st.error("The briefing workflow is currently unavailable.")
     else:
         render_notice(
             "Not at risk",
-            "This student is not currently classified as at risk. "
-            "Briefing generation is unavailable.",
+            "This student is not currently classified as at risk. Briefing generation is unavailable.",
         )
 
     confirmation = st.session_state.pop("ui_success", None)
@@ -890,20 +849,17 @@ with right_column:
         st.download_button(
             "Download Briefing",
             data=pdf_data,
-            file_name=(
-                f"advisor-briefing-"
-                f"{briefing.student_deidentified_hash[:12]}.pdf"
-            ),
+            file_name=(f"advisor-briefing-{briefing.student_id[:12]}.pdf"),
             mime="application/pdf",
             use_container_width=True,
-)
+        )
 
         # st.download_button(
         #     "Download Briefing",
         #     data=briefing.model_dump_json(indent=2),
         #     file_name=(
         #         f"advisor-briefing-"
-        #         f"{briefing.student_deidentified_hash[:12]}.json"
+        #         f"{briefing.student_id[:12]}.json"
         #     ),
         #     mime="application/json",
         #     use_container_width=True,

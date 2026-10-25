@@ -15,8 +15,8 @@ import pytest
 import streamlit as st
 from streamlit.testing.v1 import AppTest
 
+from fixture_repository import MockStudentRepository
 from student_attrition_risk.models import StudentRiskProfile
-from student_attrition_risk.student_repository import MockStudentRepository
 
 UI_PATH = str(Path(__file__).resolve().parent.parent / "src" / "student_attrition_risk" / "ui.py")
 
@@ -33,30 +33,33 @@ class _ProfileOnlyService:
     def __init__(self) -> None:
         self._repository = MockStudentRepository()
 
-    def get_student_profile(self, student_hash):
+    def get_overview(self):
+        return self._repository.get_predictions()
+
+    def get_student_profile(self, student_id):
         return StudentRiskProfile(
-            prediction=self._repository.get_prediction(student_hash),
-            snapshot=self._repository.get_snapshot(student_hash),
+            prediction=self._repository.get_prediction(student_id),
+            snapshot=self._repository.get_snapshot(student_id),
         )
 
-    def has_stored_briefing(self, student_hash):
+    def has_stored_briefing(self, student_id):
         return False
 
-    def get_stored_briefing(self, student_hash):
+    def get_stored_briefing(self, student_id):
         return None
 
 
 @pytest.fixture
 def loaded_page(monkeypatch):
-    """Factory: render the page and load ``student_hash`` through the Retrieve button."""
+    """Factory: render the page and load ``student_id`` through the Retrieve button."""
 
-    def _load(student_hash):
+    def _load(student_id):
         service = _ProfileOnlyService()
         monkeypatch.setattr("student_attrition_risk.main.build_service", lambda *_a, **_kw: service)
         st.cache_resource.clear()
         at = AppTest.from_file(UI_PATH, default_timeout=10)
         at.run()
-        at.text_input[0].set_value(student_hash).run()
+        at.text_input[0].set_value(student_id).run()
         next(b for b in at.button if b.label == "Retrieve").click().run()
         assert not at.exception
         return at
@@ -82,14 +85,14 @@ def _page_css(at) -> str:
 
 
 @pytest.mark.parametrize(
-    ("student_hash", "card_class"),
+    ("student_id", "card_class"),
     [
         (HASH_AT_RISK, "summary-card"),
         (HASH_NOT_AT_RISK, "summary-card not-risk-card"),
     ],
 )
-def test_summary_card_uses_category_class(loaded_page, student_hash, card_class):
-    at = loaded_page(student_hash)
+def test_summary_card_uses_category_class(loaded_page, student_id, card_class):
+    at = loaded_page(student_id)
 
     assert any(f'<div class="{card_class}">' in el.value for el in at.markdown), (
         f'No <div class="{card_class}"> wrapping the student summary'

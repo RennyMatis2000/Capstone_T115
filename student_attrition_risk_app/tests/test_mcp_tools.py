@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from fixture_repository import MockStudentRepository
 from student_attrition_risk.briefing_instructions import InterimInstructions
 from student_attrition_risk.briefing_provider import StubGenerationProvider
 from student_attrition_risk.briefing_store import InMemoryBriefingStore
@@ -9,7 +10,6 @@ from student_attrition_risk.briefing_validation import InterimValidator
 from student_attrition_risk.mcp_server import create_mcp_server
 from student_attrition_risk.models import DraftBriefing, ValidatedBriefing
 from student_attrition_risk.retry_workflow import RetryNotConfigured
-from student_attrition_risk.student_repository import MockStudentRepository
 from student_attrition_risk.student_service import StudentService
 
 FLAGGED = "synthetic-student-001"
@@ -34,18 +34,18 @@ async def _call(mcp, name, **arguments):
     return tools[name].fn(**arguments)
 
 
-def _seed(store, student_hash, text):
+def _seed(store, student_id, text):
     InMemoryBriefingStore.save_validated(
         store,
         ValidatedBriefing(
-            student_deidentified_hash=student_hash,
+            student_id=student_id,
             text=text,
             source="generated",
             validator_id="interim-pass-through",
             generated_at=datetime.now(UTC),
-            risk_percentage=64.0,
-            at_risk_flag=True,
-            prediction_threshold=0.5,
+            risk_score=64.0,
+            at_risk=True,
+            threshold_score=50.0,
         ),
     )
 
@@ -68,14 +68,13 @@ async def test_generate_student_briefing_returns_existing_then_regenerates():
     _seed(store, HAS_EXISTING, "stored body")
     mcp = _mcp(
         generation_provider=StubGenerationProvider(
-            draft=DraftBriefing(student_deidentified_hash=HAS_EXISTING, text="regen")),
+            draft=DraftBriefing(student_id=HAS_EXISTING, text="regen")
+        ),
         store=store,
     )
-    existing = await _call(mcp, "generate_student_briefing", student_hash=HAS_EXISTING)
+    existing = await _call(mcp, "generate_student_briefing", student_id=HAS_EXISTING)
     assert existing["source"] == "stored"
-    regenerated = await _call(
-        mcp, "generate_student_briefing", student_hash=HAS_EXISTING, regenerate=True
-    )
+    regenerated = await _call(mcp, "generate_student_briefing", student_id=HAS_EXISTING, regenerate=True)
     assert regenerated["text"] == "regen"
 
 
@@ -85,9 +84,9 @@ async def test_generate_student_briefing_error_messages():
 
     mcp = _mcp()
     with pytest.raises(ToolError, match="not flagged at risk"):
-        await _call(mcp, "generate_student_briefing", student_hash=NOT_FLAGGED)
+        await _call(mcp, "generate_student_briefing", student_id=NOT_FLAGGED)
     with pytest.raises(ToolError, match="not found"):
-        await _call(mcp, "generate_student_briefing", student_hash="missing")
+        await _call(mcp, "generate_student_briefing", student_id="missing")
 
 
 @pytest.mark.anyio
@@ -95,7 +94,7 @@ async def test_get_student_briefing_returns_value_or_none_available():
     store = InMemoryBriefingStore()
     _seed(store, HAS_EXISTING, "kept")
     mcp = _mcp(store=store)
-    present = await _call(mcp, "get_student_briefing", student_hash=HAS_EXISTING)
+    present = await _call(mcp, "get_student_briefing", student_id=HAS_EXISTING)
     assert present["source"] == "stored"
-    absent = await _call(mcp, "get_student_briefing", student_hash=FLAGGED)
-    assert absent == {"available": False, "student_hash": FLAGGED}
+    absent = await _call(mcp, "get_student_briefing", student_id=FLAGGED)
+    assert absent == {"available": False, "student_id": FLAGGED}

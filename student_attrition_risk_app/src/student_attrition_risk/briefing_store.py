@@ -27,22 +27,22 @@ class InMemoryBriefingStore:
     def __init__(self) -> None:
         self._by_hash: dict[str, list[ValidatedBriefing]] = {}
 
-    def has_validated(self, student_hash: str) -> bool:
-        return bool(self._by_hash.get(student_hash))
+    def has_validated(self, student_id: str) -> bool:
+        return bool(self._by_hash.get(student_id))
 
-    def get_latest_validated(self, student_hash: str) -> ValidatedBriefing | None:
-        entries = self._by_hash.get(student_hash)
+    def get_latest_validated(self, student_id: str) -> ValidatedBriefing | None:
+        entries = self._by_hash.get(student_id)
         return entries[-1] if entries else None
 
     def save_validated(self, briefing: ValidatedBriefing) -> None:
-        self._by_hash.setdefault(briefing.student_deidentified_hash, []).append(briefing)
+        self._by_hash.setdefault(briefing.student_id, []).append(briefing)
 
 
 class VolumeBriefingStore:
     """Governed ``BriefingStore`` backed by a Databricks Unity Catalog Volume (Feature-002 / US-15).
 
     One JSON document per validated briefing at
-    ``${BRIEFING_VOLUME}/<student_hash>/<timestamp>-attempt<n>-<token>.json``. Append-only:
+    ``${BRIEFING_VOLUME}/<student_id>/<timestamp>-attempt<n>-<token>.json``. Append-only:
     every ``save_validated`` writes a new file and nothing is ever overwritten or deleted
     (approved planning decision 4). "Most recent" is the lexicographically greatest file name;
     the fixed-width timestamp prefix makes name order chronological. A missing student
@@ -62,9 +62,9 @@ class VolumeBriefingStore:
 
             self._files = WorkspaceClient().files
 
-    def has_validated(self, student_hash: str) -> bool:
+    def has_validated(self, student_id: str) -> bool:
         try:
-            for entry in self._files.list_directory_contents(self._dir(student_hash)):
+            for entry in self._files.list_directory_contents(self._dir(student_id)):
                 if not getattr(entry, "is_directory", False) and _BRIEFING_NAME.match(
                     entry.path.rsplit("/", 1)[-1]
                 ):
@@ -74,17 +74,17 @@ class VolumeBriefingStore:
             return False
         except Exception as exc:
             raise BriefingStorageError(
-                f"could not check stored briefings for {student_hash}"
+                f"could not check stored briefings for {student_id}"
             ) from exc
 
-    def get_latest_validated(self, student_hash: str) -> ValidatedBriefing | None:
+    def get_latest_validated(self, student_id: str) -> ValidatedBriefing | None:
         try:
-            entries = list(self._files.list_directory_contents(self._dir(student_hash)))
+            entries = list(self._files.list_directory_contents(self._dir(student_id)))
         except NotFound:
             return None
         except Exception as exc:
             raise BriefingStorageError(
-                f"could not list stored briefings for {student_hash}"
+                f"could not list stored briefings for {student_id}"
             ) from exc
         names = sorted(
             entry.path
@@ -107,7 +107,7 @@ class VolumeBriefingStore:
             ) from exc
 
     def save_validated(self, briefing: ValidatedBriefing) -> None:
-        directory = self._dir(briefing.student_deidentified_hash)
+        directory = self._dir(briefing.student_id)
         path = self._file_path(briefing)
         body = briefing.model_dump_json().encode("utf-8")
 
@@ -121,14 +121,14 @@ class VolumeBriefingStore:
         except Exception as exc:
             raise BriefingStorageError(
                 f"could not store validated briefing for "
-                f"{briefing.student_deidentified_hash}"
+                f"{briefing.student_id}"
             ) from exc
 
 
-    def _dir(self, student_hash: str) -> str:
-        return f"{self._root}/{student_hash}"
+    def _dir(self, student_id: str) -> str:
+        return f"{self._root}/{student_id}"
 
     def _file_path(self, briefing: ValidatedBriefing) -> str:
         stamp = briefing.generated_at.strftime("%Y%m%dT%H%M%S%fZ")
         name = f"{stamp}-attempt{briefing.attempt_count}-{secrets.token_hex(3)}.json"
-        return f"{self._dir(briefing.student_deidentified_hash)}/{name}"
+        return f"{self._dir(briefing.student_id)}/{name}"

@@ -11,11 +11,11 @@ from datetime import UTC, datetime
 import pytest
 
 from doubles import ScriptedGenerationProvider, ScriptedValidator
+from fixture_repository import MockStudentRepository
 from student_attrition_risk.briefing_instructions import InterimInstructions
 from student_attrition_risk.briefing_store import InMemoryBriefingStore
 from student_attrition_risk.models import DraftBriefing, ValidatedBriefing, ValidationOutcome
 from student_attrition_risk.retry_workflow import SingleRetryWorkflow
-from student_attrition_risk.student_repository import MockStudentRepository
 from student_attrition_risk.student_service import (
     BriefingNotProducedError,
     BriefingStorageError,
@@ -41,8 +41,8 @@ class _RaisingStore(InMemoryBriefingStore):
         raise BriefingStorageError("volume unavailable")
 
 
-def _draft(text: str, student_hash: str = FLAGGED) -> DraftBriefing:
-    return DraftBriefing(student_deidentified_hash=student_hash, text=text)
+def _draft(text: str, student_id: str = FLAGGED) -> DraftBriefing:
+    return DraftBriefing(student_id=student_id, text=text)
 
 
 def _passed(validator_id: str = "stub-validator") -> ValidationOutcome:
@@ -66,18 +66,18 @@ def _service(*, generation, validation, store=None, repository=None):
     return service, store
 
 
-def _seed(store: InMemoryBriefingStore, student_hash: str, text: str) -> None:
+def _seed(store: InMemoryBriefingStore, student_id: str, text: str) -> None:
     InMemoryBriefingStore.save_validated(
         store,
         ValidatedBriefing(
-            student_deidentified_hash=student_hash,
+            student_id=student_id,
             text=text,
             source="generated",
             validator_id="interim-pass-through",
             generated_at=datetime.now(UTC),
-            risk_percentage=64.0,
-            at_risk_flag=True,
-            prediction_threshold=0.5,
+            risk_score=64.0,
+            at_risk=True,
+            threshold_score=50.0,
         ),
     )
 
